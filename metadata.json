@@ -1,0 +1,7 @@
+{
+  "name": "Smart Tourism by GYNIX",
+  "description": "AI-Powered Solutions for Smart Tourism in Odisha, India. Features include Odisha Travel Planner, Kalinga Cultural Heritage AI Guide with voice narration, and Authentic Handicraft Marketplace.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

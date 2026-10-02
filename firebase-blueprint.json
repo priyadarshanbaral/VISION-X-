@@ -1,0 +1,159 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user profile in the application.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID"
+        },
+        "name": {
+          "type": "string",
+          "description": "User's full name"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "User's email address"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "admin", "artisan"],
+          "description": "User's role"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "name", "email", "role", "createdAt"]
+    },
+    "Handicraft": {
+      "title": "Handicraft",
+      "description": "A handicraft listing in the marketplace.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "artisanId": {
+          "type": "string",
+          "description": "UID of the artisan who created this"
+        },
+        "artisanName": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string"
+        },
+        "price": {
+          "type": "number"
+        },
+        "image": {
+          "type": "string",
+          "format": "uri"
+        },
+        "rating": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["name", "artisanId", "artisanName", "location", "price", "image", "createdAt"]
+    },
+    "Workshop": {
+      "title": "Workshop",
+      "description": "An artisan workshop booking.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "artisanId": {
+          "type": "string"
+        },
+        "artisanName": {
+          "type": "string"
+        },
+        "duration": {
+          "type": "string"
+        },
+        "price": {
+          "type": "number"
+        },
+        "image": {
+          "type": "string",
+          "format": "uri"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["title", "artisanId", "artisanName", "duration", "price", "image", "createdAt"]
+    },
+    "Itinerary": {
+      "title": "Itinerary",
+      "description": "A user's travel itinerary.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "destination": {
+          "type": "string"
+        },
+        "startDate": {
+          "type": "string"
+        },
+        "endDate": {
+          "type": "string"
+        },
+        "budget": {
+          "type": "number"
+        },
+        "days": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "title", "destination", "startDate", "endDate", "createdAt", "days"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/User"
+      },
+      "description": "Stores user profiles."
+    },
+    "/handicrafts/{handicraftId}": {
+      "schema": {
+        "$ref": "#/entities/Handicraft"
+      },
+      "description": "Stores handicraft listings."
+    },
+    "/workshops/{workshopId}": {
+      "schema": {
+        "$ref": "#/entities/Workshop"
+      },
+      "description": "Stores workshop listings."
+    },
+    "/itineraries/{itineraryId}": {
+      "schema": {
+        "$ref": "#/entities/Itinerary"
+      },
+      "description": "Stores user itineraries."
+    }
+  }
+}
