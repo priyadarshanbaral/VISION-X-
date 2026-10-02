@@ -6,9 +6,8 @@ import {
 } from 'lucide-react';
 import Image from '../components/Image';
 import CheckoutModal from '../components/CheckoutModal';
-import { useAuth } from '../components/FirebaseProvider';
-import { db } from '../lib/firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { useAuth } from '../components/AuthProvider';
+import { Link } from '../components/Router';
 
 const ODISHA_DESTINATIONS = [
   'Bhubaneswar, Puri & Konark (Golden Triangle)',
@@ -20,11 +19,11 @@ const ODISHA_DESTINATIONS = [
 ];
 
 const ODISHA_INTERESTS = [
-  'Ancient Temples', 
-  'Odia Cuisine & Mahaprasad', 
-  'Pattachitra & Handloom Crafts', 
-  'Chilika Wildlife & Nature', 
-  'Beaches & Coastal Drives', 
+  'Ancient Temples',
+  'Odia Cuisine & Mahaprasad',
+  'Pattachitra & Handloom Crafts',
+  'Chilika Wildlife & Nature',
+  'Beaches & Coastal Drives',
   'Royal Palaces'
 ];
 
@@ -47,7 +46,7 @@ interface ItineraryDay {
 }
 
 export default function PlanPage() {
-  const { user, isAuthReady, login, loginAsGuest } = useAuth();
+  const { user, isAuthReady, api } = useAuth();
   const [destination, setDestination] = useState(ODISHA_DESTINATIONS[0]);
   const [dateFrom, setDateFrom] = useState(() => new Date().toISOString().split('T')[0]);
   const [dateTo, setDateTo] = useState(() => {
@@ -60,7 +59,7 @@ export default function PlanPage() {
   const [selectedInterests, setSelectedInterests] = useState<string[]>(['Ancient Temples', 'Odia Cuisine & Mahaprasad']);
   const [travelStyle, setTravelStyle] = useState('Moderate');
   const [travelMode, setTravelMode] = useState<'own' | 'app'>('app');
-  
+
   const [loading, setLoading] = useState(false);
   const [itinerary, setItinerary] = useState<ItineraryDay[] | null>(null);
   const [error, setError] = useState('');
@@ -71,7 +70,7 @@ export default function PlanPage() {
   const [checkoutItem, setCheckoutItem] = useState({ name: '', price: '' });
 
   const toggleInterest = (interest: string) => {
-    setSelectedInterests(prev => 
+    setSelectedInterests(prev =>
       prev.includes(interest) ? prev.filter(i => i !== interest) : [...prev, interest]
     );
   };
@@ -79,7 +78,7 @@ export default function PlanPage() {
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!destination || !dateFrom || !dateTo) return;
-    
+
     setLoading(true);
     setError('');
     setItinerary(null);
@@ -120,8 +119,8 @@ export default function PlanPage() {
         if (apiKey) {
           const ai = new GoogleGenAI({ apiKey });
           const prompt = `You are an expert Odisha Tourism AI Planner.
-Generate a detailed travel itinerary for ${destination}, Odisha, India from ${dateFrom} to ${dateTo}. 
-Budget: ₹${budgetInr}. 
+Generate a detailed travel itinerary for ${destination}, Odisha, India from ${dateFrom} to ${dateTo}.
+Budget: ₹${budgetInr}.
 User interests: ${selectedInterests.join(', ') || 'Temples and crafts'}.
 Travel style: ${travelStyle}.
 Travel mode: ${travelMode === 'own' ? 'Traveling with own personal vehicle. Do not suggest booking transit.' : 'App transport: suggest Vande Bharat Express, Mo Bus AC, or Marine Drive cabs.'}
@@ -275,19 +274,20 @@ Provide realistic coastal weather.`;
   const handleSaveItinerary = async () => {
     if (!user || !itinerary) return;
     try {
-      await addDoc(collection(db, 'itineraries'), {
-        userId: user.uid,
-        title: `Odisha Heritage Trip: ${destination}`,
-        destination,
-        startDate: dateFrom,
-        endDate: dateTo,
-        budget: budgetInr,
-        days: JSON.stringify(itinerary),
-        createdAt: serverTimestamp()
+      await api('/api/me/itineraries', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: `Odisha Heritage Trip: ${destination}`,
+          destination,
+          startDate: dateFrom,
+          endDate: dateTo,
+          budget: budgetInr,
+          days: itinerary,
+        }),
       });
       setSaved(true);
     } catch (err: any) {
-      console.error('Error saving itinerary to Firestore:', err);
+      console.error('Error saving itinerary:', err);
     }
   };
 
@@ -332,20 +332,20 @@ Provide realistic coastal weather.`;
             Log in to unlock custom AI itinerary generation tailored to Odisha spiritual shrines, craft villages, and pristine coasts.
           </p>
           <div className="space-y-3">
-            <button
-              onClick={login}
+            <Link
+              href="/login"
               className="w-full bg-gradient-to-b from-amber-500 to-amber-600 text-stone-950 font-black py-4 rounded-xl shadow-md border-b-4 border-amber-700 active:translate-y-0.5 transition-all flex items-center justify-center gap-2 cursor-pointer"
             >
               <LogIn className="w-5 h-5" />
-              Continue with Google
-            </button>
-            <button
-              onClick={loginAsGuest}
+              Sign In to Continue
+            </Link>
+            <Link
+              href="/signup"
               className="w-full bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 text-sm cursor-pointer"
             >
               <UserCheck className="w-4 h-4 text-stone-500" />
-              Continue as Guest Traveler
-            </button>
+              Create a Free Account
+            </Link>
           </div>
         </div>
       </div>

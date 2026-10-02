@@ -14,7 +14,14 @@ import {
   ODISHA_FESTIVALS,
   ODISHA_CUISINE 
 } from './src/data/odishaData.js';
-import { ODISHA_ALL_DESTINATIONS } from './src/data/odishaDestinations.js';
+import { connectDb, readCollection, getDb, mongoReady } from './src/server/db.js';
+import {
+  hashPassword,
+  verifyPassword,
+  createToken,
+  requireAuth,
+  sanitizeUser,
+} from './src/server/auth.js';
 
 dotenv.config();
 
@@ -31,10 +38,340 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', app: 'Vision X - Smart Odisha Tourism', timestamp: new Date().toISOString() });
 });
 
+// API route: Database connectivity + collection stats
+app.get('/api/db/status', async (_req, res) => {
+  const database = getDb();
+  if (!database) {
+    return res.json({ success: true, connected: false, storage: 'in-memory fallback', collections: {} });
+  }
+  const names = ['destinations', 'monuments', 'handicrafts', 'workshops', 'resorts', 'festivals', 'cuisine', 'packages', 'weddings', 'transit', 'logins'];
+  const collections: Record<string, number> = {};
+  for (const name of names) {
+    collections[name] = await database.collection(name).countDocuments();
+  }
+  res.json({ success: true, connected: true, database: process.env.MONGODB_DB || 'vision_x', collections });
+});
+
+// ============ AUTH (MongoDB backed, real-world style) ============
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+function validateSignup({ username, name, email, phone, password }: any) {
+  if (!username || String(username).trim().length < 3) return 'Username must be at least 3 characters';
+  if (!/^[a-zA-Z0-9_.]+$/.test(String(username))) return 'Username can only contain letters, numbers, dots and underscores';
+  if (!name || String(name).trim().length < 2) return 'Full name is required';
+  if (!email || !EMAIL_RE.test(String(email))) return 'Enter a valid email address';
+  if (!phone || !/^[0-9+\-\s]{10,15}$/.test(String(phone))) return 'Enter a valid phone number';
+  if (!password || String(password).length < 8) return 'Password must be at least 8 characters';
+  if (!/[A-Za-z]/.test(String(password)) || !/[0-9]/.test(String(password))) {
+    return 'Password must contain both letters and numbers';
+  }
+  return null;
+}
+
+// POST /api/auth/signup - register a new account
+app.post('/api/auth/signup', async (req, res) => {
+  try {
+    const { username, name, email, phone, password } = req.body || {};
+    const invalid = validateSignup({ username, name, email, phone, password });
+    if (invalid) return res.status(400).json({ success: false, error: invalid });
+
+    const db = getDb();
+    if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
+
+    const users = db.collection('users');
+    const lowerEmail = String(email).toLowerCase();
+    const lowerUser = String(username).toLowerCase();
+
+    if (await users.findOne({ email: lowerEmail } as any)) {
+      return res.status(409).json({ success: false, error: 'An account with this email already exists' });
+    }
+    if (await users.findOne({ username: lowerUser } as any)) {
+      return res.status(409).json({ success: false, error: 'This username is already taken' });
+    }
+
+    const doc = {
+      username: String(username).toLowerCase(),
+      name: String(name).trim(),
+      email: lowerEmail,
+      phone: String(phone).trim(),
+      passwordHash: hashPassword(String(password)),
+      role: 'user',
+      avatarColor: ['#b45309', '#0f766e', '#7c2d12', '#1e40af', '#4d7c0f'][Math.floor(Math.random() * 5)],
+      bio: '',
+      bookings: [],
+      wishlist: [],
+      createdAt: new Date(),
+      lastLoginAt: null as Date | null,
+    };
+
+    const result = await users.insertOne(doc as any);
+    const token = createToken(String(result.insertedId));
+    res.status(201).json({ success: true, token, user: sanitizeUser({ ...doc, _id: result.insertedId }) });
+  } catch (err: any) {
+    console.error('signup error:', err);
+    res.status(500).json({ success: false, error: 'Could not create account' });
+  }
+});
+
+// POST /api/auth/login - sign in with email or username
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { identifier, email, username, password } = req.body || {};
+    const id = String(identifier || email || username || '').trim().toLowerCase();
+    if (!id || !password) {
+      return res.status(400).json({ success: false, error: 'Enter your login details' });
+    }
+
+    const db = getDb();
+    if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
+
+    const users = db.collection('users');
+    const user = (await users.findOne({ email: id } as any)) || (await users.findOne({ username: id } as any));
+
+    if (!user || !verifyPassword(String(password), user.passwordHash)) {
+      return res.status(401).json({ success: false, error: 'Invalid login details. Please check your credentials.' });
+    }
+
+    await users.updateOne({ _id: user._id } as any, { $set: { lastLoginAt: new Date() } });
+    const token = createToken(String(user._id));
+    res.json({ success: true, token, user: sanitizeUser(user) });
+  } catch (err: any) {
+    console.error('login error:', err);
+    res.status(500).json({ success: false, error: 'Could not sign in' });
+  }
+});
+
+// GET /api/auth/me - current logged-in user
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  res.json({ success: true, user: sanitizeUser((req as any).user) });
+});
+
+// PUT /api/auth/me - update own profile
+app.put('/api/auth/me', requireAuth, async (req, res) => {
+  try {
+    const { name, phone, bio } = req.body || {};
+    const db = getDb()!;
+    const update: any = {};
+    if (name !== undefined) {
+      if (String(name).trim().length < 2) return res.status(400).json({ success: false, error: 'Name is too short' });
+      update.name = String(name).trim();
+    }
+    if (phone !== undefined) {
+      if (!/^[0-9+\-\s]{10,15}$/.test(String(phone))) return res.status(400).json({ success: false, error: 'Enter a valid phone number' });
+      update.phone = String(phone).trim();
+    }
+    if (bio !== undefined) update.bio = String(bio).slice(0, 400);
+    if (Object.keys(update).length === 0) return res.status(400).json({ success: false, error: 'Nothing to update' });
+
+    await db.collection('users').updateOne({ _id: (req as any).user._id } as any, { $set: update });
+    const fresh = await db.collection('users').findOne({ _id: (req as any).user._id } as any);
+    res.json({ success: true, user: sanitizeUser(fresh) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Could not update profile' });
+  }
+});
+
+// POST /api/auth/change-password
+app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!newPassword || String(newPassword).length < 8 || !/[A-Za-z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
+      return res.status(400).json({ success: false, error: 'New password must be 8+ characters with letters and numbers' });
+    }
+    const me = (req as any).user;
+    if (!verifyPassword(String(currentPassword || ''), me.passwordHash)) {
+      return res.status(401).json({ success: false, error: 'Current password is incorrect' });
+    }
+    await getDb()!.collection('users').updateOne({ _id: me._id } as any, { $set: { passwordHash: hashPassword(String(newPassword)) } });
+    res.json({ success: true, message: 'Password updated successfully' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Could not change password' });
+  }
+});
+
+// POST /api/auth/logout - audit trail entry
+app.post('/api/auth/logout', requireAuth, async (req, res) => {
+  try {
+    const db = getDb();
+    await db!.collection('activity').insertOne({
+      userId: String((req as any).user._id),
+      action: 'logout',
+      at: new Date(),
+    } as any);
+  } catch { /* audit is best-effort */ }
+  res.json({ success: true });
+});
+
+
+// ============ USER DASHBOARD DATA (per logged-in user) ============
+
+// GET /api/me/dashboard - full dashboard payload for the signed-in user
+app.get('/api/me/dashboard', requireAuth, async (req, res) => {
+  try {
+    const db = getDb()!;
+    const me = (req as any).user;
+    const userId = String(me._id);
+
+    const [bookings, wishlist, activity, destinations] = await Promise.all([
+      db.collection('bookings').find({ userId }).sort({ createdAt: -1 }).limit(50).toArray(),
+      db.collection('wishlist').find({ userId }).sort({ createdAt: -1 }).limit(50).toArray(),
+      db.collection('activity').find({ userId }).sort({ at: -1 }).limit(20).toArray(),
+      readCollection('destinations'),
+    ]);
+
+    const totalSpent = bookings
+      .filter((b: any) => b.status !== 'cancelled')
+      .reduce((sum: number, b: any) => sum + (Number(b.amount) || 0), 0);
+
+    res.json({
+      success: true,
+      stats: {
+        totalBookings: bookings.length,
+        upcomingTrips: bookings.filter((b: any) => b.status === 'confirmed' || b.status === 'pending').length,
+        wishlistCount: wishlist.length,
+        destinationsCount: destinations.length,
+        totalSpent,
+        memberSince: me.createdAt,
+        lastLoginAt: me.lastLoginAt,
+      },
+      bookings,
+      wishlist,
+      activity,
+    });
+  } catch (err: any) {
+    console.error('dashboard error:', err);
+    res.status(500).json({ success: false, error: 'Could not load dashboard' });
+  }
+});
+
+// POST /api/me/bookings - create a booking tied to the user
+app.post('/api/me/bookings', requireAuth, async (req, res) => {
+  try {
+    const { title, type, date, amount, guests, notes } = req.body || {};
+    if (!title) return res.status(400).json({ success: false, error: 'Booking title is required' });
+
+    const db = getDb()!;
+    const me = (req as any).user;
+    const doc = {
+      userId: String(me._id),
+      title: String(title),
+      type: type || 'package',
+      date: date ? new Date(date) : new Date(),
+      amount: Number(amount) || 0,
+      guests: Number(guests) || 1,
+      notes: String(notes || ''),
+      status: 'confirmed',
+      createdAt: new Date(),
+    };
+    const result = await db.collection('bookings').insertOne(doc as any);
+    await db.collection('activity').insertOne({
+      userId: String(me._id), action: 'booking_created', detail: doc.title, at: new Date(),
+    } as any);
+    res.status(201).json({ success: true, booking: { id: String(result.insertedId), ...doc } });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Could not create booking' });
+  }
+});
+
+// PATCH /api/me/bookings/:id - cancel or update a booking
+app.patch('/api/me/bookings/:id', requireAuth, async (req, res) => {
+  try {
+    const { ObjectId } = await import('mongodb');
+    const { id } = req.params;
+    const { status } = req.body || {};
+    if (!ObjectId.isValid(id)) return res.status(400).json({ success: false, error: 'Invalid booking id' });
+
+    const db = getDb()!;
+    const userId = String((req as any).user._id);
+    const allowed = ['pending', 'confirmed', 'cancelled', 'completed'];
+    if (status && !allowed.includes(status)) {
+      return res.status(400).json({ success: false, error: 'Invalid status' });
+    }
+    const updated = await db.collection('bookings').findOneAndUpdate(
+      { _id: new ObjectId(id), userId } as any,
+      { $set: { status: status || 'cancelled', updatedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+    if (!updated) return res.status(404).json({ success: false, error: 'Booking not found' });
+    res.json({ success: true, booking: { id, ...(updated as any) } });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Could not update booking' });
+  }
+});
+
+// POST /api/me/wishlist - toggle a saved destination
+app.post('/api/me/wishlist', requireAuth, async (req, res) => {
+  try {
+    const { itemId, name, image } = req.body || {};
+    if (!itemId) return res.status(400).json({ success: false, error: 'itemId is required' });
+
+    const db = getDb()!;
+    const userId = String((req as any).user._id);
+    const wishlist = db.collection('wishlist');
+    const existing = await wishlist.findOne({ userId, itemId: String(itemId) } as any);
+
+    if (existing) {
+      await wishlist.deleteOne({ _id: existing._id } as any);
+      return res.json({ success: true, added: false, message: 'Removed from wishlist' });
+    }
+    await wishlist.insertOne({
+      userId, itemId: String(itemId), name: name || '', image: image || '', createdAt: new Date(),
+    } as any);
+    res.status(201).json({ success: true, added: true, message: 'Added to wishlist' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Could not update wishlist' });
+  }
+});
+
+// POST /api/me/itineraries - save an AI-generated itinerary for the user
+app.post('/api/me/itineraries', requireAuth, async (req, res) => {
+  try {
+    const { title, destination, startDate, endDate, budget, days } = req.body || {};
+    if (!title) return res.status(400).json({ success: false, error: 'Itinerary title is required' });
+
+    const db = getDb()!;
+    const userId = String((req as any).user._id);
+    const doc = {
+      userId,
+      title: String(title),
+      destination: String(destination || ''),
+      startDate: startDate || null,
+      endDate: endDate || null,
+      budget: Number(budget) || 0,
+      days: days || [],
+      createdAt: new Date(),
+    };
+    const result = await db.collection('itineraries').insertOne(doc as any);
+    await db.collection('activity').insertOne({
+      userId, action: 'itinerary_saved', detail: doc.title, at: new Date(),
+    } as any);
+    res.status(201).json({ success: true, id: String(result.insertedId) });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Could not save itinerary' });
+  }
+});
+
+// GET /api/me/itineraries - list the user's saved itineraries
+app.get('/api/me/itineraries', requireAuth, async (req, res) => {
+  try {
+    const db = getDb()!;
+    const items = await db
+      .collection('itineraries')
+      .find({ userId: String((req as any).user._id) } as any)
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .toArray();
+    res.json({ success: true, itineraries: items });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Could not load itineraries' });
+  }
+});
+
 // API route: Get all Odisha Tourist Destinations with entry fees, coordinates & transits
-app.get('/api/destinations', (req, res) => {
+app.get('/api/destinations', async (req, res) => {
   const { region, category, search } = req.query;
-  let results = ODISHA_ALL_DESTINATIONS;
+  let results: any[] = await readCollection('destinations');
 
   if (region && typeof region === 'string' && region !== 'All Regions') {
     results = results.filter(d => d.region.toLowerCase() === region.toLowerCase());
@@ -46,9 +383,9 @@ app.get('/api/destinations', (req, res) => {
 
   if (search && typeof search === 'string') {
     const q = search.toLowerCase();
-    results = results.filter(d => 
-      d.name.toLowerCase().includes(q) || 
-      d.odiaName.includes(q) || 
+    results = results.filter(d =>
+      d.name.toLowerCase().includes(q) ||
+      d.odiaName.includes(q) ||
       d.district.toLowerCase().includes(q) ||
       d.description.toLowerCase().includes(q)
     );
@@ -58,48 +395,49 @@ app.get('/api/destinations', (req, res) => {
 });
 
 // API route: Get all Odisha Monuments
-app.get('/api/monuments', (_req, res) => {
-  res.json({ success: true, monuments: ODISHA_MONUMENTS });
+app.get('/api/monuments', async (_req, res) => {
+  res.json({ success: true, monuments: await readCollection('monuments') });
 });
 
 // API route: Get all Odisha Handicrafts
-app.get('/api/handicrafts', (_req, res) => {
-  res.json({ success: true, handicrafts: ODISHA_HANDICRAFTS });
+app.get('/api/handicrafts', async (_req, res) => {
+  res.json({ success: true, handicrafts: await readCollection('handicrafts') });
 });
 
 // API route: Get all Odisha Artisan Workshops
-app.get('/api/workshops', (_req, res) => {
-  res.json({ success: true, workshops: ODISHA_WORKSHOPS });
+app.get('/api/workshops', async (_req, res) => {
+  res.json({ success: true, workshops: await readCollection('workshops') });
 });
 
 // API route: Get all Odisha Luxury Stays & Resorts
-app.get('/api/resorts', (_req, res) => {
-  res.json({ success: true, resorts: ODISHA_RESORTS });
+app.get('/api/resorts', async (_req, res) => {
+  res.json({ success: true, resorts: await readCollection('resorts') });
 });
 
 // API route: Get all Odisha Festivals
-app.get('/api/festivals', (_req, res) => {
-  res.json({ success: true, festivals: ODISHA_FESTIVALS });
+app.get('/api/festivals', async (_req, res) => {
+  res.json({ success: true, festivals: await readCollection('festivals') });
 });
 
 // API route: Get all Odisha Cuisine & Food Guide
-app.get('/api/cuisine', (_req, res) => {
-  res.json({ success: true, cuisine: ODISHA_CUISINE });
+app.get('/api/cuisine', async (_req, res) => {
+  res.json({ success: true, cuisine: await readCollection('cuisine') });
 });
 
 // API route: Get all Odisha Travel Packages & Destination Weddings
-app.get('/api/packages', (_req, res) => {
-  res.json({ 
-    success: true, 
-    packages: ODISHA_PACKAGES, 
-    weddings: ODISHA_WEDDINGS 
+app.get('/api/packages', async (_req, res) => {
+  res.json({
+    success: true,
+    packages: await readCollection('packages'),
+    weddings: await readCollection('weddings')
   });
 });
 
 // API route: Transit search strictly across Odisha routes
-app.get('/api/transit/search', (req, res) => {
+app.get('/api/transit/search', async (req, res) => {
   const { mode, from, to } = req.query;
-  let results = ODISHA_TRANSIT_OPTIONS;
+  const allOptions: any[] = await readCollection('transit');
+  let results = allOptions;
 
   if (mode && typeof mode === 'string') {
     results = results.filter(item => item.mode === mode.toLowerCase());
@@ -115,17 +453,17 @@ app.get('/api/transit/search', (req, res) => {
     results = results.filter(item => item.to.toLowerCase().includes(qTo));
   }
 
-  res.json({ success: true, results: results.length > 0 ? results : ODISHA_TRANSIT_OPTIONS.slice(0, 3) });
+  res.json({ success: true, results: results.length > 0 ? results : allOptions.slice(0, 3) });
 });
 
 // API route: AI Odisha Travel Planner
 app.post('/api/plan', async (req, res) => {
   try {
     const { destination, dateFrom, dateTo, budget, interests, travelStyle, travelMode } = req.body;
-    
+
     // Ensure destination defaults to Odisha location if not specified
-    const targetDestination = destination && destination.toLowerCase().includes('odisha') 
-      ? destination 
+    const targetDestination = destination && destination.toLowerCase().includes('odisha')
+      ? destination
       : `${destination || 'Bhubaneswar, Puri & Konark'}, Odisha, India`;
 
     const apiKey = process.env.GEMINI_API_KEY;
@@ -296,7 +634,7 @@ app.post('/api/heritage-chat', async (req, res) => {
     if (apiKey) {
       try {
         const ai = new GoogleGenAI({ apiKey });
-        const historyText = Array.isArray(history) 
+        const historyText = Array.isArray(history)
           ? history.map((m: any) => `${m.role === 'user' ? 'User' : 'Guide'}: ${m.text}`).join('\n')
           : '';
 
@@ -353,6 +691,14 @@ Provide a concise, historically rigorous, and culturally reverent answer in 2-4 
   }
 });
 
+if (process.env.NODE_ENV === 'production') {
+  const distPath = path.join(__dirname, 'dist');
+  app.use(express.static(distPath));
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
+
 async function startServer() {
   const isDev = process.env.NODE_ENV !== 'production';
 
@@ -363,17 +709,17 @@ async function startServer() {
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(__dirname, 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
   }
+
+  await connectDb();
 
   app.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`Server listening on http://0.0.0.0:${PORT}`);
   });
 }
 
-startServer();
+export default app;
+
+if (process.env.VERCEL !== '1') {
+  startServer();
+}

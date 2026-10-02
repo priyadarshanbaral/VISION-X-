@@ -1,320 +1,669 @@
-import { useEffect, useState } from 'react';
-import { Link } from '../components/Router';
-import { 
-  Map, ShoppingBag, Settings, LogOut, Heart, Sparkles, 
-  User, LogIn, UserCheck, Calendar, Ticket, Compass 
-} from 'lucide-react';
-import { useAuth } from '../components/FirebaseProvider';
-import { db } from '../lib/firebase';
-import Image from '../components/Image';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
-
-interface SavedTrip {
-  id: string;
-  title: string;
-  startDate: string;
-  endDate: string;
-  status: string;
-}
+import { useEffect, useState } from "react";
+import { Link } from "../components/Router";
+import { useAuth } from "../components/AuthProvider";
+import {
+  Calendar,
+  MapPin,
+  Wallet,
+  Heart,
+  LogOut,
+  Settings,
+  KeyRound,
+  Check,
+  X,
+  Clock,
+  User as UserIcon,
+  Phone,
+  Mail,
+  Ticket,
+} from "lucide-react";
 
 export default function DashboardPage() {
-  const { user, login, loginAsGuest, logout, isAuthReady } = useAuth();
-  const [savedTrips, setSavedTrips] = useState<SavedTrip[]>([]);
-  const [loadingTrips, setLoadingTrips] = useState(true);
+  const { user, logout, api, refreshUser } = useAuth();
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [tab, setTab] = useState<
+    "overview" | "bookings" | "wishlist" | "profile"
+  >("overview");
+
+  const [editName, setEditName] = useState(user?.name || "");
+  const [editPhone, setEditPhone] = useState(user?.phone || "");
+  const [editBio, setEditBio] = useState(user?.bio || "");
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileMsg, setProfileMsg] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
+
+  const [currentPw, setCurrentPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(
+    null,
+  );
+  const [savingPw, setSavingPw] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await api("/api/me/dashboard");
+      setData(result);
+    } catch (err: any) {
+      setError(err.message || "Could not load your dashboard");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    async function fetchTrips() {
-      if (!user) {
-        setLoadingTrips(false);
-        return;
-      }
-      
-      try {
-        const q = query(
-          collection(db, 'itineraries'),
-          where('userId', '==', user.uid),
-          orderBy('createdAt', 'desc')
-        );
-        const querySnapshot = await getDocs(q);
-        const trips: SavedTrip[] = [];
-        querySnapshot.forEach((doc) => {
-          const data = doc.data();
-          
-          let status = 'Upcoming';
-          if (data.startDate) {
-            const start = new Date(data.startDate);
-            const now = new Date();
-            if (start > now) status = 'Upcoming';
-            else status = 'Past';
-          }
-
-          trips.push({
-            id: doc.id,
-            title: data.title || 'Odisha Heritage Tour',
-            startDate: data.startDate || '2026-10-15',
-            endDate: data.endDate || '2026-10-18',
-            status: status
-          });
-        });
-        setSavedTrips(trips);
-      } catch (err) {
-        console.warn('Trips fetch error, using sample Odisha trip:', err);
-        setSavedTrips([
-          {
-            id: 'sample-odisha-1',
-            title: 'Golden Triangle: Bhubaneswar • Konark • Puri',
-            startDate: '2026-10-15',
-            endDate: '2026-10-18',
-            status: 'Upcoming'
-          },
-          {
-            id: 'sample-odisha-2',
-            title: 'Chilika Lake & Satapada Dolphin Eco-Safari',
-            startDate: '2026-11-05',
-            endDate: '2026-11-07',
-            status: 'Upcoming'
-          }
-        ]);
-      } finally {
-        setLoadingTrips(false);
-      }
+    if (user) {
+      setEditName(user.name || "");
+      setEditPhone(user.phone || "");
+      setEditBio(user.bio || "");
+      load();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
-    fetchTrips();
-  }, [user]);
+  const saveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingProfile(true);
+    setProfileMsg(null);
+    try {
+      await api("/api/auth/me", {
+        method: "PUT",
+        body: JSON.stringify({
+          name: editName,
+          phone: editPhone,
+          bio: editBio,
+        }),
+      });
+      await refreshUser();
+      setProfileMsg({ ok: true, text: "Profile updated successfully" });
+    } catch (err: any) {
+      setProfileMsg({ ok: false, text: err.message });
+    } finally {
+      setSavingProfile(false);
+    }
+  };
 
-  if (!isAuthReady) {
-    return (
-      <div className="min-h-screen bg-stone-50 py-12 px-4 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-4 border-amber-500 border-t-transparent rounded-full animate-spin" />
-          <span className="text-xs text-stone-500 font-medium">Loading Traveler Dashboard...</span>
-        </div>
-      </div>
-    );
-  }
+  const changePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingPw(true);
+    setPwMsg(null);
+    try {
+      const res = await api("/api/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({
+          currentPassword: currentPw,
+          newPassword: newPw,
+        }),
+      });
+      setPwMsg({ ok: true, text: res.message });
+      setCurrentPw("");
+      setNewPw("");
+    } catch (err: any) {
+      setPwMsg({ ok: false, text: err.message });
+    } finally {
+      setSavingPw(false);
+    }
+  };
+
+  const cancelBooking = async (id: string) => {
+    try {
+      await api(`/api/me/bookings/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "cancelled" }),
+      });
+      load();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const removeWishlist = async (itemId: string) => {
+    try {
+      await api("/api/me/wishlist", {
+        method: "POST",
+        body: JSON.stringify({ itemId }),
+      });
+      load();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-stone-50 py-12 px-4 flex items-center justify-center">
-        <div className="bg-white p-10 rounded-3xl shadow-xl border border-stone-200/80 text-center max-w-md w-full">
-          <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-6">
-            <Compass className="w-10 h-10 text-amber-700" />
-          </div>
-          <h2 className="font-serif text-3xl font-bold text-stone-900 mb-3">Odisha Traveler Portal</h2>
-          <p className="text-stone-600 mb-8 text-sm leading-relaxed">
-            Please log in to view your saved temple itineraries, verified craft orders, transit tickets, and personalized AI recommendations.
-          </p>
-          <div className="space-y-3">
-            <button 
-              onClick={login} 
-              className="w-full bg-gradient-to-b from-amber-500 to-amber-600 text-stone-950 font-black py-4 rounded-xl shadow-md border-b-4 border-amber-700 active:translate-y-0.5 transition-all flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <LogIn className="w-5 h-5" /> Log In with Google
-            </button>
-            <button 
-              onClick={loginAsGuest} 
-              className="w-full bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 text-sm cursor-pointer"
-            >
-              <UserCheck className="w-4 h-4 text-stone-500" /> Continue as Guest Traveler
-            </button>
-          </div>
+      <div className="min-h-[60vh] flex flex-col items-center justify-center px-4 text-center">
+        <UserIcon className="w-14 h-14 text-amber-500 mb-4" />
+        <h1 className="text-2xl font-black text-stone-900 mb-2">
+          Please sign in to continue
+        </h1>
+        <p className="text-stone-600 mb-6">
+          Your traveler dashboard is only available to signed-in members.
+        </p>
+        <div className="flex gap-3">
+          <Link
+            href="/login"
+            className="px-6 py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold transition-colors"
+          >
+            Sign In
+          </Link>
+          <Link
+            href="/signup"
+            className="px-6 py-3 rounded-xl border border-stone-300 text-stone-700 font-bold hover:bg-stone-100 transition-colors"
+          >
+            Create Account
+          </Link>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="min-h-screen bg-stone-50 py-12 px-4">
-      <div className="max-w-7xl mx-auto">
-        
-        {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between mb-12 gap-6 bg-white p-8 rounded-3xl border border-stone-200 shadow-sm">
-          <div className="flex items-center gap-6">
-            <div className="relative w-20 h-20 rounded-full bg-gradient-to-br from-amber-200 to-amber-400 border-4 border-white shadow-md flex items-center justify-center text-amber-900 text-2xl font-black overflow-hidden">
-              {user.photoURL ? (
-                <Image src={user.photoURL} alt={user.displayName || 'User'} fill className="object-cover" referrerPolicy="no-referrer" />
-              ) : (
-                <span>{user.displayName?.charAt(0) || user.email?.charAt(0)?.toUpperCase() || 'O'}</span>
-              )}
-            </div>
-            <div>
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-amber-100 text-amber-900 text-[11px] font-bold uppercase tracking-wider mb-1">
-                Vision X Explorer • Odisha
-              </div>
-              <h1 className="font-serif text-3xl font-bold text-stone-900">{user.displayName || 'Odisha Heritage Traveler'}</h1>
-              <p className="text-stone-500 text-sm">{user.email || 'traveler@smarttour.local'}</p>
-            </div>
-          </div>
-          
-          <div className="flex gap-3">
-            <button 
-              onClick={logout} 
-              title="Logout"
-              className="px-4 py-2.5 rounded-xl bg-stone-100 hover:bg-rose-50 text-stone-700 hover:text-rose-600 transition-all text-xs font-bold flex items-center gap-2 cursor-pointer border border-stone-200"
-            >
-              <LogOut className="w-4 h-4" /> Logout
-            </button>
-          </div>
-        </div>
+  const stats = data?.stats;
+  const initials = user.name
+    .split(" ")
+    .map((n) => n[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          
-          {/* Left Column: Trips & Purchases */}
-          <div className="lg:col-span-2 space-y-8">
-            
-            {/* Saved Trips */}
-            <div className="bg-white rounded-3xl p-8 border border-stone-200 shadow-sm">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="font-serif text-2xl font-bold text-stone-900 flex items-center gap-2.5">
-                  <div className="p-2 bg-amber-100 rounded-xl text-amber-700">
-                    <Map className="w-5 h-5" />
-                  </div>
-                  Saved Odisha Itineraries
-                </h2>
-                <Link href="/plan" className="text-xs font-bold text-amber-700 hover:underline">
-                  + Create New Route
-                </Link>
-              </div>
-              
-              <div className="space-y-4">
-                {loadingTrips ? (
-                  <div className="space-y-3">
-                    <div className="h-16 bg-stone-100 rounded-2xl animate-pulse"></div>
-                    <div className="h-16 bg-stone-100 rounded-2xl animate-pulse"></div>
-                  </div>
-                ) : savedTrips.length > 0 ? (
-                  savedTrips.map((trip) => (
-                    <div 
-                      key={trip.id} 
-                      className="p-5 rounded-2xl border border-stone-200 bg-stone-50 hover:bg-white hover:shadow-md transition-all flex items-center justify-between group"
-                    >
-                      <div>
-                        <h4 className="font-bold text-stone-900 text-base group-hover:text-amber-800 transition-colors">
-                          {trip.title}
-                        </h4>
-                        <div className="flex items-center gap-2 text-xs text-stone-500 mt-1 font-medium">
-                          <Calendar className="w-3.5 h-3.5 text-amber-600" />
-                          <span>{trip.startDate} &rarr; {trip.endDate}</span>
-                        </div>
-                      </div>
-                      <span className="text-xs font-bold px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-                        {trip.status}
-                      </span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-center py-8 text-stone-500 text-sm">
-                    No itineraries saved yet. <Link href="/plan" className="text-amber-700 font-bold underline">Generate your first Odisha plan</Link>.
-                  </div>
+  const tabs = [
+    { id: "overview", label: "Overview", icon: Wallet },
+    { id: "bookings", label: "My Bookings", icon: Ticket },
+    { id: "wishlist", label: "Wishlist", icon: Heart },
+    { id: "profile", label: "Profile & Security", icon: Settings },
+  ] as const;
+
+  return (
+    <div className="min-h-screen bg-[#f6f5f2]">
+      <div className="px-4 pt-6 sm:px-6 lg:px-8 lg:pt-8">
+        <div className="relative mx-auto max-w-6xl overflow-hidden rounded-[2rem] bg-gradient-to-br from-[#182523] via-[#263a34] to-[#384b3c] text-white shadow-[0_24px_70px_-32px_rgba(15,23,42,0.65)]">
+          <div className="pointer-events-none absolute -right-24 -top-40 h-96 w-96 rounded-full bg-amber-300/10 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-40 right-1/4 h-72 w-72 rounded-full bg-emerald-300/10 blur-3xl" />
+          <div className="relative flex flex-col gap-8 px-6 py-8 sm:px-9 sm:py-10 lg:flex-row lg:items-center lg:px-12">
+            <div
+              className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full text-2xl font-black ring-4 ring-white/15 shadow-xl"
+              style={{ backgroundColor: user.avatarColor || "#b45309" }}
+            >
+              {initials}
+            </div>
+            <div className="min-w-0 flex-grow">
+              <p className="text-xs font-bold uppercase tracking-[0.24em] text-amber-300">
+                Your traveler hub
+              </p>
+              <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">
+                Welcome back, {user.name.split(" ")[0]}
+              </h1>
+              <p className="mt-2 max-w-xl text-sm leading-6 text-stone-300 sm:text-base">
+                Your next great escape starts here. Pick up where you left off
+                and make your next journey unforgettable.
+              </p>
+              <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-xs font-medium text-stone-300 sm:text-sm">
+                <span className="inline-flex items-center gap-1.5">
+                  <UserIcon className="h-3.5 w-3.5 text-amber-300" /> @{user.username}
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <Mail className="h-3.5 w-3.5 text-amber-300" /> {user.email}
+                </span>
+                {user.phone && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Phone className="h-3.5 w-3.5 text-amber-300" /> {user.phone}
+                  </span>
                 )}
               </div>
             </div>
-
-            {/* Bookings & Artisan Orders */}
-            <div className="bg-white rounded-3xl p-8 border border-stone-200 shadow-sm">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="font-serif text-2xl font-bold text-stone-900 flex items-center gap-2.5">
-                  <div className="p-2 bg-amber-100 rounded-xl text-amber-700">
-                    <ShoppingBag className="w-5 h-5" />
-                  </div>
-                  Verified Bookings & Artisan Orders
-                </h2>
-              </div>
-              
-              <div className="space-y-3">
-                {[
-                  { item: 'Raghurajpur Pattachitra "Tree of Life"', date: 'Oct 01, 2026', price: '₹8,500', status: 'Handcrafted & Dispatched' },
-                  { item: 'Puri - Howrah Vande Bharat Express (EC)', date: 'Oct 02, 2026', price: '₹1,425', status: 'Confirmed Seat' },
-                  { item: 'Master Pattachitra Painting Workshop (Guru Rabindra)', date: 'Oct 03, 2026', price: '₹2,200', status: 'Confirmed Slot' },
-                  { item: 'Chilika Eco-Catamaran Dolphin Cruise Ticket', date: 'Oct 04, 2026', price: '₹1,850', status: 'Confirmed' }
-                ].map((order, idx) => (
-                  <div key={idx} className="flex items-center justify-between p-4 rounded-2xl border border-stone-100 bg-stone-50">
-                    <div>
-                      <h4 className="font-bold text-stone-900 text-sm">{order.item}</h4>
-                      <p className="text-xs text-stone-500">{order.date}</p>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-black text-stone-900 text-sm">{order.price}</div>
-                      <div className="text-[11px] text-emerald-700 font-semibold">{order.status}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
+            <button
+              onClick={logout}
+              className="inline-flex shrink-0 items-center justify-center gap-2 self-start rounded-xl border border-white/15 bg-white/[0.07] px-5 py-3 text-sm font-semibold text-white/90 backdrop-blur transition hover:border-rose-300/40 hover:bg-rose-400/15 hover:text-white lg:self-center"
+            >
+              <LogOut className="h-4 w-4" /> Sign out
+            </button>
           </div>
-
-          {/* Right Column: AI Recommendations & Wishlist */}
-          <div className="lg:col-span-1 space-y-8">
-            
-            {/* AI Odisha Suggestions */}
-            <div className="bg-gradient-to-br from-stone-900 to-stone-950 rounded-3xl p-8 text-white shadow-xl">
-              <div className="flex items-center gap-2 mb-4">
-                <Sparkles className="w-5 h-5 text-amber-400" />
-                <h3 className="font-serif text-xl font-bold">AI Odisha Insights</h3>
-              </div>
-              <p className="text-stone-400 text-xs mb-6 leading-relaxed">
-                Tailored according to your exploration of Kalinga temple architecture and coastal marine sanctuaries.
-              </p>
-              
-              <div className="space-y-4">
-                <div className="bg-stone-800/70 p-4 rounded-2xl border border-stone-700/60">
-                  <div className="text-[11px] font-bold text-amber-400 uppercase tracking-wider mb-1">
-                    Special Event Alert
-                  </div>
-                  <h4 className="font-bold text-white text-sm mb-1">Konark Dance Festival</h4>
-                  <p className="text-xs text-stone-400">
-                    Held annually against the floodlit Konark Sun Temple. Book early to secure oceanfront resorts.
-                  </p>
-                </div>
-
-                <div className="bg-stone-800/70 p-4 rounded-2xl border border-stone-700/60">
-                  <div className="text-[11px] font-bold text-amber-400 uppercase tracking-wider mb-1">
-                    Hidden Gem
-                  </div>
-                  <h4 className="font-bold text-white text-sm mb-1">Mangalajodi Bird Sanctuary</h4>
-                  <p className="text-xs text-stone-400">
-                    Over 160 species of migratory birds from Siberia. Silence is maintained by former poachers who are now eco-guides.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Wishlist */}
-            <div className="bg-white rounded-3xl p-8 border border-stone-200 shadow-sm">
-              <div className="flex items-center gap-2 mb-4">
-                <Heart className="w-5 h-5 text-rose-500 fill-rose-500" />
-                <h3 className="font-serif text-xl font-bold text-stone-900">Saved Wishlist</h3>
-              </div>
-              <p className="text-xs text-stone-500 mb-6">Saved master crafts and luxury stays in Odisha</p>
-
-              <div className="space-y-3">
-                <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-100 flex items-center justify-between">
-                  <div>
-                    <div className="text-xs font-bold text-stone-900">Cuttack Silver Tarakasi Sun Wheel</div>
-                    <div className="text-[11px] text-amber-800 font-semibold">₹12,500 (~$150)</div>
-                  </div>
-                  <Link href="/marketplace" className="text-xs font-bold text-stone-900 hover:text-amber-700">
-                    View &rarr;
-                  </Link>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-stone-50 border border-stone-100 flex items-center justify-between">
-                  <div>
-                    <div className="text-xs font-bold text-stone-900">The Belgadia Palace Suite Stay</div>
-                    <div className="text-[11px] text-amber-800 font-semibold">₹18,000 / night</div>
-                  </div>
-                  <Link href="/luxury" className="text-xs font-bold text-stone-900 hover:text-amber-700">
-                    View &rarr;
-                  </Link>
-                </div>
-              </div>
-            </div>
-
-          </div>
-
         </div>
+      </div>
+
+      <div className="sticky top-16 z-40 mt-6 border-b border-stone-200/80 bg-[#f6f5f2]/90 backdrop-blur-xl">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex gap-1 overflow-x-auto">
+          {tabs.map((t) => {
+            const Icon = t.icon;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={`flex items-center gap-2 px-4 py-3.5 text-sm font-bold whitespace-nowrap border-b-2 transition-colors ${
+                  tab === t.id
+                    ? "border-amber-600 text-stone-900"
+                      : "border-transparent text-stone-500 hover:text-stone-900"
+                }`}
+              >
+                <Icon className="w-4 h-4" /> {t.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
+        {error && (
+          <div className="mb-6 bg-rose-50 border border-rose-200 text-rose-800 text-sm rounded-xl px-4 py-3">
+            {error}
+          </div>
+        )}
+
+        {loading ? (
+          <div className="py-20 text-center text-stone-500">
+            Loading your dashboard…
+          </div>
+        ) : (
+          <>
+            {tab === "overview" && (
+              <div className="space-y-6">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-[0.2em] text-amber-700">
+                      At a glance
+                    </p>
+                    <h2 className="mt-1 text-2xl font-semibold tracking-tight text-stone-900">
+                      Your travel snapshot
+                    </h2>
+                  </div>
+                  <p className="text-sm text-stone-500">
+                    A little inspiration for your next adventure.
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+                  {[
+                    {
+                      label: "Total Bookings",
+                      value: stats?.totalBookings ?? 0,
+                      icon: Calendar,
+                      color: "text-amber-600",
+                      iconBg: "bg-amber-50",
+                    },
+                    {
+                      label: "Upcoming Trips",
+                      value: stats?.upcomingTrips ?? 0,
+                      icon: MapPin,
+                      color: "text-teal-600",
+                      iconBg: "bg-teal-50",
+                    },
+                    {
+                      label: "Wishlist Items",
+                      value: stats?.wishlistCount ?? 0,
+                      icon: Heart,
+                      color: "text-rose-500",
+                      iconBg: "bg-rose-50",
+                    },
+                    {
+                      label: "Total Spent",
+                      value: `₹${(stats?.totalSpent ?? 0).toLocaleString("en-IN")}`,
+                      icon: Wallet,
+                      color: "text-indigo-600",
+                      iconBg: "bg-indigo-50",
+                    },
+                  ].map((card) => {
+                    const Icon = card.icon;
+                    return (
+                      <div
+                        key={card.label}
+                        className="group rounded-2xl border border-stone-200/80 bg-white p-4 shadow-[0_8px_28px_-20px_rgba(28,25,23,0.45)] transition duration-200 hover:-translate-y-0.5 hover:border-stone-300 hover:shadow-[0_16px_36px_-22px_rgba(28,25,23,0.4)] sm:p-5"
+                      >
+                        <div className={`mb-4 flex h-10 w-10 items-center justify-center rounded-xl ${card.iconBg}`}>
+                          <Icon className={`h-5 w-5 ${card.color}`} />
+                        </div>
+                        <p className="text-xl font-bold tracking-tight text-stone-900 sm:text-2xl">
+                          {card.value}
+                        </p>
+                        <p className="mt-1.5 text-xs font-medium text-stone-500 sm:text-sm">
+                          {card.label}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="grid gap-5 lg:grid-cols-2">
+                  <div className="rounded-2xl border border-stone-200/80 bg-white p-5 shadow-[0_12px_40px_-30px_rgba(28,25,23,0.4)] sm:p-6">
+                    <div className="mb-5 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-stone-400">
+                          Keep exploring
+                        </p>
+                        <h2 className="mt-1 font-semibold text-stone-900">
+                          Recent bookings
+                        </h2>
+                      </div>
+                      <button
+                        onClick={() => setTab("bookings")}
+                        className="rounded-lg px-2.5 py-2 text-xs font-semibold text-amber-800 transition hover:bg-amber-50"
+                      >
+                        View all
+                      </button>
+                    </div>
+                    {data?.bookings?.length ? (
+                      <ul className="space-y-0">
+                        {data.bookings.slice(0, 5).map((b: any) => (
+                          <li
+                            key={b._id}
+                            className="flex items-center justify-between gap-3 border-b border-stone-100 py-3 first:pt-0 last:border-0 last:pb-0"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-stone-800">
+                                {b.title}
+                              </p>
+                              <p className="mt-1 text-xs text-stone-500">
+                                {new Date(b.date).toLocaleDateString("en-IN")} ·{" "}
+                                {b.guests} guest(s)
+                              </p>
+                            </div>
+                            <span
+                              className={`text-xs font-bold px-2.5 py-1 rounded-full capitalize ${
+                                b.status === "confirmed"
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : b.status === "cancelled"
+                                    ? "bg-rose-100 text-rose-700"
+                                    : "bg-amber-100 text-amber-700"
+                              }`}
+                            >
+                              {b.status}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="rounded-xl bg-stone-50 px-4 py-5 text-sm leading-6 text-stone-500">
+                        No bookings yet. Explore our packages to get started.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="rounded-2xl border border-stone-200/80 bg-white p-5 shadow-[0_12px_40px_-30px_rgba(28,25,23,0.4)] sm:p-6">
+                    <div className="mb-5 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-stone-400">
+                          Your journey
+                        </p>
+                        <h2 className="mt-1 font-semibold text-stone-900">
+                          Account activity
+                        </h2>
+                      </div>
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-stone-50 px-3 py-1.5 text-[11px] font-medium text-stone-500">
+                        <Clock className="h-3.5 w-3.5" />
+                        Since{" "}
+                        {stats?.memberSince
+                          ? new Date(stats.memberSince).toLocaleDateString(
+                              "en-IN",
+                              { month: "short", year: "numeric" },
+                            )
+                          : "—"}
+                      </span>
+                    </div>
+                    {data?.activity?.length ? (
+                      <ul className="space-y-3">
+                        {data.activity.map((a: any, i: number) => (
+                          <li
+                            key={i}
+                            className="flex items-start gap-2.5 text-sm text-stone-600"
+                          >
+                            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-50">
+                              <Check className="h-3 w-3 text-emerald-600" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block font-medium capitalize text-stone-700">
+                                {String(a.action).replace(/_/g, " ")}
+                              </span>
+                              {a.detail && (
+                                <span className="mt-0.5 block truncate text-xs text-stone-400">
+                                  {a.detail}
+                                </span>
+                              )}
+                            </span>
+                            <span className="shrink-0 pt-0.5 text-[11px] text-stone-400">
+                              {new Date(a.at).toLocaleDateString("en-IN")}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="rounded-xl bg-stone-50 px-4 py-5 text-sm text-stone-500">
+                        No recent activity.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {tab === "bookings" && (
+              <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-sm">
+                <h2 className="font-black text-stone-900 mb-5">My Bookings</h2>
+                {data?.bookings?.length ? (
+                  <div className="space-y-3">
+                    {data.bookings.map((b: any) => (
+                      <div
+                        key={b._id}
+                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border border-stone-200 rounded-xl p-4"
+                      >
+                        <div>
+                          <p className="font-bold text-stone-900">{b.title}</p>
+                          <p className="text-sm text-stone-500 mt-0.5">
+                            {new Date(b.date).toLocaleDateString("en-IN")} ·{" "}
+                            {b.guests} guest(s) · ₹
+                            {Number(b.amount).toLocaleString("en-IN")}
+                          </p>
+                          {b.notes && (
+                            <p className="text-xs text-stone-400 mt-1">
+                              {b.notes}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={`text-xs font-bold px-2.5 py-1 rounded-full capitalize ${
+                              b.status === "confirmed"
+                                ? "bg-emerald-100 text-emerald-700"
+                                : b.status === "cancelled"
+                                  ? "bg-rose-100 text-rose-700"
+                                  : "bg-amber-100 text-amber-700"
+                            }`}
+                          >
+                            {b.status}
+                          </span>
+                          {b.status !== "cancelled" && (
+                            <button
+                              onClick={() => cancelBooking(b._id)}
+                              className="text-xs font-bold text-rose-600 hover:text-rose-800 inline-flex items-center gap-1"
+                            >
+                              <X className="w-3.5 h-3.5" /> Cancel
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-stone-500">
+                    You have no bookings yet.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {tab === "wishlist" && (
+              <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-sm">
+                <h2 className="font-black text-stone-900 mb-5">My Wishlist</h2>
+                {data?.wishlist?.length ? (
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {data.wishlist.map((w: any) => (
+                      <div
+                        key={w._id}
+                        className="border border-stone-200 rounded-xl overflow-hidden"
+                      >
+                        {w.image && (
+                          <img
+                            src={w.image}
+                            alt={w.name}
+                            className="w-full h-32 object-cover"
+                          />
+                        )}
+                        <div className="p-4 flex items-center justify-between gap-2">
+                          <p className="font-bold text-sm text-stone-800 line-clamp-2">
+                            {w.name}
+                          </p>
+                          <button
+                            onClick={() => removeWishlist(w.itemId)}
+                            title="Remove"
+                            className="shrink-0 p-1.5 rounded-lg hover:bg-rose-50 text-rose-500"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-stone-500">
+                    Your wishlist is empty.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {tab === "profile" && (
+              <div className="grid lg:grid-cols-2 gap-6">
+                <form
+                  onSubmit={saveProfile}
+                  className="bg-white rounded-2xl border border-stone-200 p-6 shadow-sm space-y-4"
+                >
+                  <h2 className="font-black text-stone-900">Profile Details</h2>
+                  {profileMsg && (
+                    <div
+                      className={`text-sm rounded-xl px-4 py-2.5 ${
+                        profileMsg.ok
+                          ? "bg-emerald-50 text-emerald-800"
+                          : "bg-rose-50 text-rose-800"
+                      }`}
+                    >
+                      {profileMsg.text}
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-sm font-semibold text-stone-700 mb-1.5">
+                      Username
+                    </label>
+                    <input
+                      value={user.username}
+                      disabled
+                      className="w-full px-4 py-2.5 rounded-xl border border-stone-200 bg-stone-100 text-stone-500 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-stone-700 mb-1.5">
+                      Email
+                    </label>
+                    <input
+                      value={user.email}
+                      disabled
+                      className="w-full px-4 py-2.5 rounded-xl border border-stone-200 bg-stone-100 text-stone-500 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-stone-700 mb-1.5">
+                      Full Name
+                    </label>
+                    <input
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-xl border border-stone-300 text-sm focus:border-amber-500 focus:ring-4 focus:ring-amber-500/10 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-stone-700 mb-1.5">
+                      Phone
+                    </label>
+                    <input
+                      value={editPhone}
+                      onChange={(e) => setEditPhone(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-xl border border-stone-300 text-sm focus:border-amber-500 focus:ring-4 focus:ring-amber-500/10 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-stone-700 mb-1.5">
+                      Bio
+                    </label>
+                    <textarea
+                      value={editBio}
+                      onChange={(e) => setEditBio(e.target.value)}
+                      rows={3}
+                      className="w-full px-4 py-2.5 rounded-xl border border-stone-300 text-sm focus:border-amber-500 focus:ring-4 focus:ring-amber-500/10 outline-none resize-none"
+                    />
+                  </div>
+                  <button
+                    disabled={savingProfile}
+                    className="w-full bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white font-bold py-3 rounded-xl transition-colors"
+                  >
+                    {savingProfile ? "Saving…" : "Save Changes"}
+                  </button>
+                </form>
+
+                <form
+                  onSubmit={changePassword}
+                  className="bg-white rounded-2xl border border-stone-200 p-6 shadow-sm space-y-4 h-fit"
+                >
+                  <h2 className="font-black text-stone-900 flex items-center gap-2">
+                    <KeyRound className="w-4 h-4 text-amber-600" /> Change
+                    Password
+                  </h2>
+                  {pwMsg && (
+                    <div
+                      className={`text-sm rounded-xl px-4 py-2.5 ${
+                        pwMsg.ok
+                          ? "bg-emerald-50 text-emerald-800"
+                          : "bg-rose-50 text-rose-800"
+                      }`}
+                    >
+                      {pwMsg.text}
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-sm font-semibold text-stone-700 mb-1.5">
+                      Current Password
+                    </label>
+                    <input
+                      type="password"
+                      value={currentPw}
+                      onChange={(e) => setCurrentPw(e.target.value)}
+                      required
+                      className="w-full px-4 py-2.5 rounded-xl border border-stone-300 text-sm focus:border-amber-500 focus:ring-4 focus:ring-amber-500/10 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-stone-700 mb-1.5">
+                      New Password
+                    </label>
+                    <input
+                      type="password"
+                      value={newPw}
+                      onChange={(e) => setNewPw(e.target.value)}
+                      required
+                      placeholder="8+ characters with letters & numbers"
+                      className="w-full px-4 py-2.5 rounded-xl border border-stone-300 text-sm focus:border-amber-500 focus:ring-4 focus:ring-amber-500/10 outline-none"
+                    />
+                  </div>
+                  <button
+                    disabled={savingPw}
+                    className="w-full bg-stone-900 hover:bg-stone-800 disabled:opacity-60 text-white font-bold py-3 rounded-xl transition-colors"
+                  >
+                    {savingPw ? "Updating…" : "Update Password"}
+                  </button>
+                </form>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

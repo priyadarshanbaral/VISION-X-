@@ -1,5 +1,5 @@
 import ErrorBoundary from './components/ErrorBoundary';
-import FirebaseProvider from './components/FirebaseProvider';
+import AuthProvider from './components/AuthProvider';
 import { RouterProvider, useRouter, Link } from './components/Router';
 import Navbar from './components/Navbar';
 import HomePage from './pages/HomePage';
@@ -9,6 +9,8 @@ import DestinationsPage from './pages/DestinationsPage';
 import MarketplacePage from './pages/MarketplacePage';
 import LuxuryPage from './pages/LuxuryPage';
 import DashboardPage from './pages/DashboardPage';
+import LoginPage from './pages/LoginPage';
+import SignupPage from './pages/SignupPage';
 import VisionXLogo from './components/VisionXLogo';
 import { Compass, Heart } from 'lucide-react';
 
@@ -28,6 +30,10 @@ function PageRouter() {
     CurrentComponent = LuxuryPage;
   } else if (currentPath.startsWith('/dashboard')) {
     CurrentComponent = DashboardPage;
+  } else if (currentPath.startsWith('/login')) {
+    CurrentComponent = LoginPage;
+  } else if (currentPath.startsWith('/signup')) {
+    CurrentComponent = SignupPage;
   }
 
   return (
@@ -62,11 +68,11 @@ function PageRouter() {
 export default function App() {
   return (
     <ErrorBoundary>
-      <FirebaseProvider>
+      <AuthProvider>
         <RouterProvider>
           <PageRouter />
         </RouterProvider>
-      </FirebaseProvider>
+      </AuthProvider>
     </ErrorBoundary>
   );
 }
