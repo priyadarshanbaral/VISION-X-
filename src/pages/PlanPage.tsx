@@ -2,21 +2,17 @@ import { useState } from 'react';
 import { GoogleGenAI } from '@google/genai';
 import { 
   MapPin, Loader2, Navigation, Clock, Map, Utensils, 
-  ShoppingBag, Train, Plane, Save, CheckCircle2, CloudSun, LogIn, Sparkles, UserCheck, Compass 
+  ShoppingBag, Train, Plane, Save, CheckCircle2, CloudSun, LogIn, Sparkles, UserCheck, Compass,
+  Waves, Bird, Hotel, ExternalLink, Leaf, ShieldCheck
 } from 'lucide-react';
 import Image from '../components/Image';
 import CheckoutModal from '../components/CheckoutModal';
 import { useAuth } from '../components/AuthProvider';
 import { Link } from '../components/Router';
-
-const ODISHA_DESTINATIONS = [
-  'Bhubaneswar, Puri & Konark (Golden Triangle)',
-  'Chilika Lake & Satapada Dolphin Lagoon',
-  'Similipal National Park & Mayurbhanj Royal Heritage',
-  'Daringbadi & Eastern Ghats Coffee Valleys',
-  'Raghurajpur Crafts Village & Pipili Applique Trail',
-  'Gopalpur-on-Sea & Tampara Lake'
-];
+import { ODISHA_ALL_DESTINATIONS } from '../data/odishaDestinations';
+import { ODISHA_CUISINE, ODISHA_RESORTS } from '../data/odishaData';
+import { createChilikaItinerary } from '../data/chilikaPlanner';
+import { createDestinationItinerary } from '../data/destinationPlanner';
 
 const ODISHA_INTERESTS = [
   'Ancient Temples',
@@ -47,7 +43,7 @@ interface ItineraryDay {
 
 export default function PlanPage() {
   const { user, isAuthReady, api } = useAuth();
-  const [destination, setDestination] = useState(ODISHA_DESTINATIONS[0]);
+  const [destination, setDestination] = useState(ODISHA_ALL_DESTINATIONS[0]?.id ?? '');
   const [dateFrom, setDateFrom] = useState(() => new Date().toISOString().split('T')[0]);
   const [dateTo, setDateTo] = useState(() => {
     const d = new Date();
@@ -64,6 +60,39 @@ export default function PlanPage() {
   const [itinerary, setItinerary] = useState<ItineraryDay[] | null>(null);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const selectedDestination = ODISHA_ALL_DESTINATIONS.find(item => item.id === destination);
+  const destinationTitle = selectedDestination?.name ?? destination;
+  const isChilika = selectedDestination?.id === 'chilika-lake-satapada';
+  const destinationHotels = selectedDestination?.nearbyHotels ?? [];
+  const chilikaDestination = ODISHA_ALL_DESTINATIONS.find(item => item.id === 'chilika-lake-satapada');
+  const chilikaStays = [
+    ...(chilikaDestination?.nearbyHotels ?? []).map(hotel => ({
+      name: hotel.name,
+      area: 'Satapada',
+      category: hotel.category,
+      price: hotel.pricePerNightInr,
+      rating: hotel.rating,
+      highlights: hotel.highlights
+    })),
+    ...ODISHA_RESORTS.filter(resort => resort.id === 'swosti-chilika-resort').map(resort => ({
+      name: resort.name,
+      area: resort.location,
+      category: resort.category,
+      price: resort.priceInr,
+      rating: resort.rating,
+      highlights: resort.features
+    }))
+  ];
+  const chilikaSeafood = ODISHA_CUISINE.filter(dish => dish.origin.toLowerCase().includes('chilika'));
+  const destinationDishes = selectedDestination
+    ? ODISHA_CUISINE.filter(dish =>
+      `${dish.origin} ${dish.mustTrySpot}`.toLowerCase().includes(selectedDestination.district.toLowerCase())
+      || selectedDestination.name.toLowerCase().includes(dish.id.split('-')[0])
+    )
+    : [];
+  const recommendedDishes = destinationDishes.length > 0
+    ? destinationDishes
+    : ODISHA_CUISINE.slice(0, 2);
 
   // Checkout Modal State
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
@@ -94,6 +123,7 @@ export default function PlanPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             destination,
+            destinationName: destinationTitle,
             dateFrom,
             dateTo,
             budget: budgetInr,
@@ -113,13 +143,20 @@ export default function PlanPage() {
         console.warn('Backend API plan attempt failed, using fallback plan:', backendErr);
       }
 
+      if (!generatedData && isChilika) {
+        generatedData = createChilikaItinerary(dateFrom, dateTo);
+      }
+      if (!generatedData) {
+        generatedData = createDestinationItinerary(destination, dateFrom, dateTo, travelMode);
+      }
+
       // If backend didn't return data, try client direct GenAI if key available
       if (!generatedData) {
         const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || (window as any).__GEMINI_API_KEY__;
         if (apiKey) {
           const ai = new GoogleGenAI({ apiKey });
           const prompt = `You are an expert Odisha Tourism AI Planner.
-Generate a detailed travel itinerary for ${destination}, Odisha, India from ${dateFrom} to ${dateTo}.
+Generate a detailed travel itinerary for ${destinationTitle}, Odisha, India from ${dateFrom} to ${dateTo}.
 Budget: ₹${budgetInr}.
 User interests: ${selectedInterests.join(', ') || 'Temples and crafts'}.
 Travel style: ${travelStyle}.
@@ -277,8 +314,8 @@ Provide realistic coastal weather.`;
       await api('/api/me/itineraries', {
         method: 'POST',
         body: JSON.stringify({
-          title: `Odisha Heritage Trip: ${destination}`,
-          destination,
+          title: `Odisha Heritage Trip: ${destinationTitle}`,
+          destination: destinationTitle,
           startDate: dateFrom,
           endDate: dateTo,
           budget: budgetInr,
@@ -320,38 +357,6 @@ Provide realistic coastal weather.`;
     );
   }
 
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-stone-50 py-12 px-4 flex items-center justify-center">
-        <div className="bg-white p-10 rounded-3xl shadow-xl border border-stone-200/80 text-center max-w-md w-full">
-          <div className="w-20 h-20 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner">
-            <Compass className="w-10 h-10 text-amber-700" />
-          </div>
-          <h2 className="font-serif text-3xl font-bold text-stone-900 mb-3">Sign in to Plan Odisha Tour</h2>
-          <p className="text-stone-600 mb-8 leading-relaxed text-sm">
-            Log in to unlock custom AI itinerary generation tailored to Odisha spiritual shrines, craft villages, and pristine coasts.
-          </p>
-          <div className="space-y-3">
-            <Link
-              href="/login"
-              className="w-full bg-gradient-to-b from-amber-500 to-amber-600 text-stone-950 font-black py-4 rounded-xl shadow-md border-b-4 border-amber-700 active:translate-y-0.5 transition-all flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <LogIn className="w-5 h-5" />
-              Sign In to Continue
-            </Link>
-            <Link
-              href="/signup"
-              className="w-full bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 text-sm cursor-pointer"
-            >
-              <UserCheck className="w-4 h-4 text-stone-500" />
-              Create a Free Account
-            </Link>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-stone-50 py-12 px-4">
       <div className="max-w-7xl mx-auto">
@@ -366,15 +371,20 @@ Provide realistic coastal weather.`;
             Plan Your Odisha Heritage Journey
           </h1>
           <p className="text-stone-600 text-base md:text-lg max-w-2xl mx-auto font-light">
-            Vision X intelligent routing across Puri Jagannath Darshan, Konark Marine Drive, Raghurajpur crafts, Chilika dolphins, and Similipal tiger reserves.
+            Explore all {ODISHA_ALL_DESTINATIONS.length} featured destinations, then build a dated trip with local highlights, stays, food, and travel tips.
           </p>
+          {!user && (
+            <p className="mt-3 text-xs font-medium text-stone-500">
+              Browse and plan for free. <Link href="/login" className="font-bold text-amber-800 underline">Sign in</Link> only if you want to save your itinerary.
+            </p>
+          )}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           
           {/* Form Settings */}
           <div className="lg:col-span-4">
-            <div className="bg-white rounded-3xl p-6 md:p-8 shadow-sm border border-stone-200 sticky top-24">
+            <div className="bg-white rounded-3xl p-6 md:p-8 shadow-sm border border-stone-200 lg:sticky lg:top-24">
               <div className="flex items-center justify-between mb-6">
                 <h2 className="font-serif text-2xl font-bold text-stone-900">Tour Preferences</h2>
                 <div className="flex items-center bg-stone-100 p-1 rounded-xl text-xs font-bold">
@@ -432,16 +442,22 @@ Provide realistic coastal weather.`;
                   </div>
                 </div>
 
-                {/* Odisha Circuit Destination */}
+                {/* Odisha destinations */}
                 <div>
-                  <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-2">Odisha Circuit</label>
+                  <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-2">
+                    Choose a destination ({ODISHA_ALL_DESTINATIONS.length} places)
+                  </label>
                   <select
                     value={destination}
-                    onChange={(e) => setDestination(e.target.value)}
+                    onChange={(e) => {
+                      setDestination(e.target.value);
+                      setItinerary(null);
+                      setSaved(false);
+                    }}
                     className="w-full px-3.5 py-3 rounded-xl border border-stone-200 bg-stone-50 focus:bg-white focus:ring-2 focus:ring-amber-500 outline-none text-xs font-semibold text-stone-800"
                   >
-                    {ODISHA_DESTINATIONS.map((dest, idx) => (
-                      <option key={idx} value={dest}>{dest}</option>
+                    {ODISHA_ALL_DESTINATIONS.map((place) => (
+                      <option key={place.id} value={place.id}>{place.name} · {place.district}</option>
                     ))}
                   </select>
                 </div>
@@ -565,14 +581,41 @@ Provide realistic coastal weather.`;
             )}
 
             {!itinerary && !loading && !error && (
-              <div className="h-full min-h-[500px] bg-white rounded-3xl border-2 border-stone-200 border-dashed flex flex-col items-center justify-center text-stone-400 p-8 text-center">
-                <div className="p-6 bg-amber-50 rounded-full mb-4">
-                  <Compass className="w-16 h-16 text-amber-600" />
+              <div className="rounded-3xl border border-stone-200 bg-white p-5 shadow-sm md:p-7">
+                <div className="mb-6 flex items-center gap-4">
+                  <div className="rounded-2xl bg-amber-50 p-3">
+                    <Compass className="h-8 w-8 text-amber-700" />
+                  </div>
+                  <div>
+                    <h3 className="font-serif text-xl font-bold text-stone-900">Choose from all Odisha destinations</h3>
+                    <p className="mt-1 text-sm text-stone-500">Select a place here or from the destination menu, then generate your trip.</p>
+                  </div>
                 </div>
-                <h3 className="text-xl font-bold text-stone-700 mb-2">Explore the Soul of Kalinga</h3>
-                <p className="font-medium text-stone-500 text-sm max-w-md">
-                  Select your Odisha circuit and preferences on the left to receive an AI-curated itinerary with temple timings, food stops, and artisan encounters.
-                </p>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {ODISHA_ALL_DESTINATIONS.map(place => (
+                    <button
+                      key={place.id}
+                      type="button"
+                      onClick={() => {
+                        setDestination(place.id);
+                        setItinerary(null);
+                        setSaved(false);
+                      }}
+                      className={`rounded-2xl border p-4 text-left transition ${
+                        destination === place.id
+                          ? 'border-amber-500 bg-amber-50 shadow-sm'
+                          : 'border-stone-200 bg-stone-50 hover:border-amber-300 hover:bg-white'
+                      }`}
+                    >
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-teal-800">{place.category} · {place.district}</span>
+                      <span className="mt-2 block text-sm font-bold leading-snug text-stone-900">{place.name}</span>
+                      <span className="mt-1 block text-xs leading-relaxed text-stone-500">{place.tagline}</span>
+                      <span className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-amber-800">
+                        {destination === place.id ? 'Selected' : 'Select this place'} <Navigation className="h-3.5 w-3.5" />
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -580,7 +623,7 @@ Provide realistic coastal weather.`;
               <div className="space-y-6">
                 <div className="w-full h-56 bg-stone-200 rounded-3xl animate-pulse flex items-center justify-center flex-col">
                   <Loader2 className="w-8 h-8 text-amber-600 animate-spin mb-3" />
-                  <span className="text-sm font-semibold text-stone-600">Structuring Temple Timings & Artisan Stops...</span>
+                  <span className="text-sm font-semibold text-stone-600">Building your destination-specific Odisha guide...</span>
                 </div>
               </div>
             )}
@@ -590,16 +633,8 @@ Provide realistic coastal weather.`;
                 {/* Visual Banner */}
                 <div className="w-full h-56 rounded-3xl overflow-hidden relative shadow-md">
                   <Image 
-                    src={
-                      destination.toLowerCase().includes('puri') || destination.toLowerCase().includes('golden')
-                        ? 'https://i.pinimg.com/736x/7e/f1/9c/7ef19cc13322d0e8cfd322b7203b8d77.jpg'
-                        : destination.toLowerCase().includes('konark')
-                        ? 'https://media.istockphoto.com/id/1444924249/photo/konark-sun-temple-at-sunrise-konark-temple-is-a-unesco-world-heritage-site-at-puri-odisha.jpg?s=612x612&w=0&k=20&c=5Gd3UDpZeYh8DejD4a4TTrpAZLoPw5SARAUFT7hfwRk='
-                        : destination.toLowerCase().includes('bhubaneswar')
-                        ? 'https://thumb.wikimedia.org/wikipedia/commons/thumb/4/4d/Lingaraj_temple_Bhubaneswar.jpg/1920px-Lingaraj_temple_Bhubaneswar.jpg?utm_source=commons.wikimedia.org&utm_campaign=index&utm_content=thumbnail&_=20160928072727'
-                        : 'https://media.istockphoto.com/id/1444924249/photo/konark-sun-temple-at-sunrise-konark-temple-is-a-unesco-world-heritage-site-at-puri-odisha.jpg?s=612x612&w=0&k=20&c=5Gd3UDpZeYh8DejD4a4TTrpAZLoPw5SARAUFT7hfwRk='
-                    } 
-                    alt="Odisha Circuit" 
+                    src={selectedDestination?.image || ''}
+                    alt={destinationTitle}
                     fill 
                     className="object-cover" 
                     referrerPolicy="no-referrer" 
@@ -610,26 +645,334 @@ Provide realistic coastal weather.`;
                         <Navigation className="w-3.5 h-3.5" /> AI Route Active
                       </div>
                       <h3 className="font-serif text-2xl font-bold text-white">
-                        {destination}
+                        {destinationTitle}
                       </h3>
                     </div>
                   </div>
                 </div>
 
+                {selectedDestination && (
+                  <section className="space-y-6" aria-label={`${destinationTitle} destination guide`}>
+                    <div className="rounded-3xl border border-emerald-200 bg-gradient-to-br from-emerald-950 via-teal-900 to-cyan-900 p-6 text-white shadow-md md:p-8">
+                      <p className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-emerald-200">
+                        {selectedDestination.category} · {selectedDestination.region}
+                      </p>
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div className="max-w-3xl">
+                          <h3 className="font-serif text-2xl font-bold md:text-3xl">{selectedDestination.name}</h3>
+                          <p className="mt-2 text-sm leading-relaxed text-emerald-50/90">{selectedDestination.tagline}</p>
+                          <p className="mt-4 text-sm leading-relaxed text-emerald-50/80">{selectedDestination.description}</p>
+                        </div>
+                        <a
+                          href={selectedDestination.googleMapsUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-bold text-emerald-950 transition hover:bg-emerald-50"
+                        >
+                          Open map <ExternalLink className="h-4 w-4" />
+                        </a>
+                      </div>
+                      <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        {[
+                          { title: 'Best time to visit', value: selectedDestination.bestTimeToVisit },
+                          { title: 'Usual visiting hours', value: selectedDestination.timings },
+                          { title: 'Weekly closure', value: selectedDestination.closedOn },
+                          { title: 'Entry information', value: selectedDestination.entryFee.indian }
+                        ].map(item => (
+                          <div key={item.title} className="rounded-2xl border border-white/15 bg-white/10 p-4">
+                            <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-200">{item.title}</p>
+                            <p className="mt-2 text-sm font-semibold leading-relaxed text-white">{item.value}</p>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="mt-4 text-xs leading-relaxed text-emerald-50/70">
+                        Timings, prices, access, and seasonal operations can change. Confirm with the official site or local operator before you travel.
+                      </p>
+                    </div>
+
+                    <div className="grid gap-6 xl:grid-cols-2">
+                      <div className="rounded-3xl border border-stone-200 bg-white p-6 shadow-sm md:p-7">
+                        <h3 className="mb-4 flex items-center gap-2 font-serif text-xl font-bold text-stone-900">
+                          <Navigation className="h-5 w-5 text-teal-700" /> Getting there
+                        </h3>
+                        <div className="space-y-3 text-xs leading-relaxed text-stone-600">
+                          <p><strong className="text-stone-900">Airport:</strong> {selectedDestination.transit.nearestAirport.name} ({selectedDestination.transit.nearestAirport.code}), about {selectedDestination.transit.nearestAirport.distanceKm} km away; listed transfer time {selectedDestination.transit.nearestAirport.approxTime}.</p>
+                          <p><strong className="text-stone-900">Rail:</strong> {selectedDestination.transit.nearestRailway.station} ({selectedDestination.transit.nearestRailway.code}), about {selectedDestination.transit.nearestRailway.distanceKm} km away; onward mode: {selectedDestination.transit.nearestRailway.mode}.</p>
+                          <p><strong className="text-stone-900">Bus:</strong> {selectedDestination.transit.busConnectivity.route}. {selectedDestination.transit.busConnectivity.operators}; listed frequency: {selectedDestination.transit.busConnectivity.frequency}.</p>
+                          <p><strong className="text-stone-900">By road:</strong> {selectedDestination.transit.roadDrive.popularRoute} via {selectedDestination.transit.roadDrive.highway}.</p>
+                          <p className="rounded-xl bg-amber-50 p-3 text-amber-950"><strong>Before leaving:</strong> schedules, fares, and road conditions can change; verify current details locally. {selectedDestination.transit.roadDrive.tollInfo}</p>
+                        </div>
+                        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                          <div className="rounded-xl bg-stone-50 p-3 text-xs">
+                            <p className="font-bold text-stone-900">Camera / entry notes</p>
+                            <p className="mt-1 leading-relaxed text-stone-600">{selectedDestination.entryFee.camera} {selectedDestination.entryFee.additionalInfo}</p>
+                          </div>
+                          <div className="rounded-xl bg-stone-50 p-3 text-xs">
+                            <p className="font-bold text-stone-900">International visitors</p>
+                            <p className="mt-1 leading-relaxed text-stone-600">{selectedDestination.entryFee.foreigner}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-3xl border border-stone-200 bg-white p-6 shadow-sm md:p-7">
+                        <h3 className="mb-4 flex items-center gap-2 font-serif text-xl font-bold text-stone-900">
+                          <Hotel className="h-5 w-5 text-amber-700" /> Stay nearby
+                        </h3>
+                        {destinationHotels.length > 0 ? (
+                          <div className="space-y-3">
+                            {destinationHotels.slice(0, 3).map(hotel => (
+                              <div key={hotel.name} className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <div>
+                                    <p className="text-sm font-bold text-stone-900">{hotel.name}</p>
+                                    <p className="mt-1 text-xs text-stone-500">{hotel.category} · about {hotel.distanceKm} km away</p>
+                                  </div>
+                                  <span className="rounded-lg bg-white px-2.5 py-1 text-xs font-bold text-amber-800">
+                                    ~₹{hotel.pricePerNightInr.toLocaleString('en-IN')} / night
+                                  </span>
+                                </div>
+                                <p className="mt-2 text-xs leading-relaxed text-stone-600">{hotel.highlights.join(' · ')}</p>
+                                <div className="mt-3 flex items-center justify-between">
+                                  <span className="text-xs font-semibold text-stone-500">Listed rating: {hotel.rating}/5 · confirm current rate</span>
+                                  <a
+                                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${hotel.name} ${selectedDestination.district} Odisha`)}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center gap-1 text-xs font-bold text-teal-800 hover:text-teal-950"
+                                  >
+                                    Map <ExternalLink className="h-3.5 w-3.5" />
+                                  </a>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="rounded-xl bg-stone-50 p-4 text-xs leading-relaxed text-stone-600">
+                            No stay listing is available for this place yet. Search for licensed stays in {selectedDestination.district} and confirm the exact distance and current price before booking.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-6 xl:grid-cols-2">
+                      <div className="rounded-3xl border border-stone-200 bg-white p-6 shadow-sm md:p-7">
+                        <h3 className="mb-4 flex items-center gap-2 font-serif text-xl font-bold text-stone-900">
+                          <Utensils className="h-5 w-5 text-emerald-700" /> Local food to look for
+                        </h3>
+                        <div className="space-y-3">
+                          {recommendedDishes.map(dish => (
+                            <div key={dish.id} className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+                              <p className="text-sm font-bold text-stone-900">{dish.name}</p>
+                              <p className="mt-1 text-xs leading-relaxed text-stone-600">{dish.description}</p>
+                              <p className="mt-2 text-xs font-semibold text-emerald-900">Known for: {dish.origin} · Try around: {dish.mustTrySpot}</p>
+                            </div>
+                          ))}
+                        </div>
+                        <p className="mt-3 text-xs leading-relaxed text-stone-500">
+                          Restaurant availability and menu vary by season. Ask for local specialties and mention dietary needs before ordering.
+                        </p>
+                      </div>
+                      <div className="rounded-3xl border border-stone-200 bg-white p-6 shadow-sm md:p-7">
+                        <h3 className="mb-4 flex items-center gap-2 font-serif text-xl font-bold text-stone-900">
+                          <ShieldCheck className="h-5 w-5 text-teal-700" /> Helpful local tips
+                        </h3>
+                        <ul className="space-y-3">
+                          {selectedDestination.travelTips.map((tip, index) => (
+                            <li key={`${selectedDestination.id}-tip-${index}`} className="flex gap-3 rounded-xl bg-stone-50 p-3 text-xs leading-relaxed text-stone-600">
+                              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" /> {tip}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
+                {isChilika && (
+                  <section className="space-y-6" aria-label="Chilika travel guide">
+                    <div className="rounded-3xl border border-teal-200 bg-gradient-to-br from-teal-950 via-teal-900 to-emerald-900 p-6 text-white shadow-md md:p-8">
+                      <div className="flex items-start gap-4">
+                        <div className="rounded-2xl bg-white/10 p-3">
+                          <Waves className="h-7 w-7 text-teal-200" />
+                        </div>
+                        <div>
+                          <p className="mb-1 text-xs font-bold uppercase tracking-[0.18em] text-teal-200">Your Chilika field guide</p>
+                          <h3 className="font-serif text-2xl font-bold md:text-3xl">Choose the right shore for your trip</h3>
+                          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-teal-50/90">
+                            Chilika is a large lagoon, not one walkable town. Satapada is the practical base for dolphin trips; Barkul is a separate east-shore base for Kalijai; Mangalajodi is a seasonal birding area. Plan road transfers between shores and confirm boat routes locally.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-6 grid gap-3 md:grid-cols-3">
+                        {[
+                          { title: 'Satapada', focus: 'Dolphin trips and the sea mouth', icon: <Waves className="h-5 w-5" />, query: 'Satapada Jetty Chilika Odisha' },
+                          { title: 'Barkul / Rambha', focus: 'Kalijai Island and east-shore cruises', icon: <Map className="h-5 w-5" />, query: 'Barkul Chilika Lake Odisha' },
+                          { title: 'Mangalajodi', focus: 'Community-guided birding, best in winter', icon: <Bird className="h-5 w-5" />, query: 'Mangalajodi Wetland Odisha' }
+                        ].map(zone => (
+                          <a
+                            key={zone.title}
+                            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(zone.query)}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="rounded-2xl border border-white/15 bg-white/10 p-4 transition hover:bg-white/15"
+                          >
+                            <span className="mb-2 flex items-center gap-2 text-sm font-bold text-white">{zone.icon}{zone.title}<ExternalLink className="ml-auto h-3.5 w-3.5 text-teal-200" /></span>
+                            <span className="block text-xs leading-relaxed text-teal-50/80">{zone.focus}</span>
+                          </a>
+                        ))}
+                      </div>
+                      <div className="mt-5 flex flex-wrap gap-x-6 gap-y-2 border-t border-white/15 pt-4 text-xs text-teal-50/90">
+                        <span><strong className="text-white">Best all-round window:</strong> November–February</span>
+                        <span><strong className="text-white">Boat access:</strong> daylight and weather dependent</span>
+                        <span><strong className="text-white">Bird sanctuary:</strong> access restrictions may apply</span>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-3">
+                      {[
+                        {
+                          title: 'By air',
+                          detail: chilikaDestination
+                            ? `${chilikaDestination.transit.nearestAirport.name} · about ${chilikaDestination.transit.nearestAirport.distanceKm} km · ${chilikaDestination.transit.nearestAirport.approxTime} by road`
+                            : 'Bhubaneswar airport is the main air gateway; confirm your transfer.',
+                          icon: <Plane className="h-5 w-5" />
+                        },
+                        {
+                          title: 'By rail / road',
+                          detail: chilikaDestination
+                            ? `${chilikaDestination.transit.nearestRailway.station} · about ${chilikaDestination.transit.nearestRailway.distanceKm} km from Satapada. ${chilikaDestination.transit.roadDrive.popularRoute}.`
+                            : 'Puri is a practical rail gateway for Satapada; confirm local road transfers.',
+                          icon: <Train className="h-5 w-5" />
+                        },
+                        {
+                          title: 'Boat budget',
+                          detail: chilikaDestination?.entryFee.additionalInfo || 'Confirm boat prices, route, and trip length with an authorized local operator.',
+                          icon: <Waves className="h-5 w-5" />
+                        }
+                      ].map(item => (
+                        <div key={item.title} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+                          <h3 className="mb-2 flex items-center gap-2 text-sm font-bold text-stone-900">{item.icon}{item.title}</h3>
+                          <p className="text-xs leading-relaxed text-stone-600">{item.detail}</p>
+                          <p className="mt-2 text-[11px] font-semibold text-amber-800">Indicative only — reconfirm fares and travel time before departure.</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="grid gap-6 xl:grid-cols-2">
+                      <div className="rounded-3xl border border-stone-200 bg-white p-6 shadow-sm md:p-7">
+                        <div className="mb-5 flex items-center gap-3">
+                          <div className="rounded-xl bg-amber-100 p-2.5 text-amber-800"><Hotel className="h-5 w-5" /></div>
+                          <div>
+                            <h3 className="font-serif text-xl font-bold text-stone-900">Where to stay</h3>
+                            <p className="text-xs text-stone-500">Pick your base by the jetty you want to use</p>
+                          </div>
+                        </div>
+                        <div className="space-y-3">
+                          {chilikaStays.map(stay => (
+                            <div key={stay.name} className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div>
+                                  <h4 className="text-sm font-bold text-stone-900">{stay.name}</h4>
+                                  <p className="mt-1 text-xs text-stone-500">{stay.area} · {stay.category}</p>
+                                </div>
+                                <span className="rounded-lg bg-white px-2.5 py-1 text-xs font-bold text-amber-800">
+                                  ~₹{stay.price.toLocaleString('en-IN')} / night
+                                </span>
+                              </div>
+                              <p className="mt-2 text-xs leading-relaxed text-stone-600">{stay.highlights.slice(0, 3).join(' · ')}</p>
+                              <div className="mt-3 flex items-center justify-between">
+                                <span className="text-xs font-semibold text-stone-500">Listed rating: {stay.rating}/5 · guide price; confirm current rates</span>
+                                <a
+                                  href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${stay.name} ${stay.area} Odisha`)}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs font-bold text-teal-800 hover:text-teal-950"
+                                >
+                                  Map <ExternalLink className="h-3.5 w-3.5" />
+                                </a>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <p className="mt-4 rounded-xl bg-amber-50 p-3 text-xs leading-relaxed text-amber-950">
+                          <strong>Best fit:</strong> Stay in Satapada the night before an early dolphin trip. For Kalijai or Mangalajodi, check the property’s exact location and transfer time before booking; the shores are not interchangeable.
+                        </p>
+                      </div>
+
+                      <div className="rounded-3xl border border-stone-200 bg-white p-6 shadow-sm md:p-7">
+                        <div className="mb-5 flex items-center gap-3">
+                          <div className="rounded-xl bg-emerald-100 p-2.5 text-emerald-800"><Utensils className="h-5 w-5" /></div>
+                          <div>
+                            <h3 className="font-serif text-xl font-bold text-stone-900">What to eat</h3>
+                            <p className="text-xs text-stone-500">Local lagoon catch and Odia comfort food</p>
+                          </div>
+                        </div>
+                        <div className="space-y-3">
+                          {chilikaSeafood.map(dish => (
+                            <div key={dish.id} className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+                              <h4 className="text-sm font-bold text-stone-900">{dish.name}</h4>
+                              <p className="mt-1 text-xs leading-relaxed text-stone-600">{dish.description}</p>
+                              <p className="mt-2 text-xs font-semibold text-emerald-900">Try around: {dish.mustTrySpot}</p>
+                            </div>
+                          ))}
+                          <div className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+                            <h4 className="text-sm font-bold text-stone-900">Also ask for</h4>
+                            <p className="mt-1 text-xs leading-relaxed text-stone-600">Fresh lake fish fry, seasonal prawns, rice with dalma, and pakhala when available. Ask what is freshly landed; request a vegetarian meal if preferred.</p>
+                          </div>
+                        </div>
+                        <div className="mt-4 flex gap-2 rounded-xl bg-sky-50 p-3 text-xs leading-relaxed text-sky-950">
+                          <Leaf className="mt-0.5 h-4 w-4 shrink-0 text-sky-700" />
+                          Choose legal, in-season catch and avoid buying protected wildlife or undersized catch.
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 rounded-3xl border border-stone-200 bg-white p-6 shadow-sm md:grid-cols-2 md:p-7">
+                      <div>
+                        <h3 className="mb-3 flex items-center gap-2 font-serif text-xl font-bold text-stone-900">
+                          <ShieldCheck className="h-5 w-5 text-teal-700" /> Boat and wildlife checklist
+                        </h3>
+                        <ul className="space-y-2 text-xs leading-relaxed text-stone-600">
+                          <li>• Confirm authorized operator, fare, route, return time, life jackets, and weather before paying.</li>
+                          <li>• Do not feed, touch, crowd, or chase dolphins; sightings are not guaranteed.</li>
+                          <li>• Nalabana access is regulated; do not land or enter restricted sanctuary areas.</li>
+                          <li>• Carry water, sun protection, cash, and any medicine; mobile coverage can vary on the water.</li>
+                        </ul>
+                      </div>
+                      <div className="rounded-2xl bg-teal-50 p-5">
+                        <h4 className="mb-2 text-sm font-bold text-teal-950">How to use your timetable</h4>
+                        <p className="text-xs leading-relaxed text-teal-950/80">
+                          The dated schedule below follows your selected trip dates. It is a planning guide, not a live boat or wildlife schedule: verify departure times, sanctuary access, hotel rates, and local weather before travel.
+                        </p>
+                        <p className="mt-3 flex items-start gap-2 text-xs font-semibold leading-relaxed text-teal-900">
+                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                          If your trip is short, prioritize one shore rather than trying to cover Satapada, Barkul, and Mangalajodi in a single day.
+                        </p>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
                 {/* Save Itinerary Action */}
                 <div className="flex justify-end">
-                  <button 
-                    onClick={handleSaveItinerary}
-                    disabled={saved}
-                    className={`px-6 py-3 rounded-xl font-bold text-xs transition-all flex items-center gap-2 shadow-md cursor-pointer ${
-                      saved 
-                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
-                        : 'bg-stone-900 text-white hover:bg-stone-800 active:scale-95'
-                    }`}
-                  >
-                    {saved ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <Save className="w-4 h-4 text-amber-400" />}
-                    {saved ? 'Saved to Your Odisha Dashboard' : 'Save Itinerary to Dashboard'}
-                  </button>
+                  {user ? (
+                    <button 
+                      onClick={handleSaveItinerary}
+                      disabled={saved}
+                      className={`px-6 py-3 rounded-xl font-bold text-xs transition-all flex items-center gap-2 shadow-md cursor-pointer ${
+                        saved 
+                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
+                          : 'bg-stone-900 text-white hover:bg-stone-800 active:scale-95'
+                      }`}
+                    >
+                      {saved ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <Save className="w-4 h-4 text-amber-400" />}
+                      {saved ? 'Saved to Your Odisha Dashboard' : 'Save Itinerary to Dashboard'}
+                    </button>
+                  ) : (
+                    <Link href="/login" className="inline-flex items-center gap-2 rounded-xl bg-stone-900 px-6 py-3 text-xs font-bold text-white shadow-md transition hover:bg-stone-800">
+                      <LogIn className="h-4 w-4 text-amber-400" /> Sign in to save itinerary
+                    </Link>
+                  )}
                 </div>
 
                 {/* Daily Timeline */}

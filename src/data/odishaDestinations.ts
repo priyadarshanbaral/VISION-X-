@@ -141,6 +141,7 @@ export const ODISHA_ALL_DESTINATIONS: TouristDestination[] = [
         image: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=600&q=80',
         highlights: ['Walking distance to Sun Temple', 'Odia Restaurant', 'Spacious Lawns']
       }
+      
     ],
     travelTips: [
       'Arrive early around 6:30 AM for magical sunrise lighting without tourist crowds.',

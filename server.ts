@@ -14,6 +14,8 @@ import {
   ODISHA_FESTIVALS,
   ODISHA_CUISINE 
 } from './src/data/odishaData.js';
+import { createChilikaItinerary } from './src/data/chilikaPlanner.js';
+import { createDestinationItinerary } from './src/data/destinationPlanner.js';
 import { connectDb, readCollection, getDb, mongoReady } from './src/server/db.js';
 import {
   hashPassword,
@@ -459,12 +461,28 @@ app.get('/api/transit/search', async (req, res) => {
 // API route: AI Odisha Travel Planner
 app.post('/api/plan', async (req, res) => {
   try {
-    const { destination, dateFrom, dateTo, budget, interests, travelStyle, travelMode } = req.body;
+    const { destination, destinationName, dateFrom, dateTo, budget, interests, travelStyle, travelMode } = req.body;
+    const destinationId = String(destination || '');
+    const destinationLabel = String(destinationName || destinationId);
 
     // Ensure destination defaults to Odisha location if not specified
-    const targetDestination = destination && destination.toLowerCase().includes('odisha')
-      ? destination
-      : `${destination || 'Bhubaneswar, Puri & Konark'}, Odisha, India`;
+    const targetDestination = destinationLabel.toLowerCase().includes('odisha')
+      ? destinationLabel
+      : `${destinationLabel || 'Bhubaneswar, Puri & Konark'}, Odisha, India`;
+
+    if (destinationId === 'chilika-lake-satapada') {
+      return res.json({ success: true, itinerary: createChilikaItinerary(dateFrom, dateTo) });
+    }
+
+    const curatedDestinationItinerary = createDestinationItinerary(
+      destinationId,
+      dateFrom,
+      dateTo,
+      travelMode === 'own' ? 'own' : 'app'
+    );
+    if (curatedDestinationItinerary.length > 0) {
+      return res.json({ success: true, itinerary: curatedDestinationItinerary });
+    }
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (apiKey) {
