@@ -338,6 +338,7 @@ export default function LuxuryPage() {
         onClose={() => setIsCheckoutOpen(false)} 
         itemName={checkoutItem.name} 
         price={checkoutItem.price} 
+        bookingType="resort"
       />
     </main>
   );

@@ -779,6 +779,7 @@ export default function DestinationsPage() {
         onClose={() => setIsCheckoutOpen(false)}
         itemName={checkoutItem.name}
         price={checkoutItem.price}
+        bookingType="package"
       />
     </div>
   );

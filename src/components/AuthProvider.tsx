@@ -1,4 +1,4 @@
-import {
+﻿import {
   createContext,
   useContext,
   useEffect,
@@ -6,6 +6,8 @@ import {
   ReactNode,
   useCallback,
 } from "react";
+
+import { hasSupabaseConfig, supabase } from "../lib/supabase";
 
 export interface AppUser {
   id: string;
@@ -61,9 +63,110 @@ async function parse(res: Response) {
   } catch {
     body = { error: text };
   }
-  if (!res.ok)
+  if (!res.ok) {
     throw new Error(body.error || "Something went wrong. Please try again.");
+  }
   return body;
+}
+
+const AVATAR_COLORS = ["#b45309", "#0f766e", "#7c2d12", "#1e40af", "#4d7c0f"];
+
+function randomAvatarColor(seed: string) {
+  const index =
+    Math.abs(
+      seed
+        .split("")
+        .reduce((sum, char) => sum + char.charCodeAt(0), 0),
+    ) % AVATAR_COLORS.length;
+  return AVATAR_COLORS[index];
+}
+
+function normalizeUserRecord(record: any): AppUser {
+  const recordName =
+    record?.name ||
+    record?.full_name ||
+    record?.user_metadata?.name ||
+    record?.email?.split("@")[0] ||
+    "Traveler";
+
+  const recordUsername = String(
+    record?.username ??
+      record?.user_metadata?.username ??
+      (record?.email ? record.email.split("@")[0] : "traveler"),
+  ).toLowerCase();
+
+  return {
+    id: record?.id || record?._id || "",
+    username: recordUsername,
+    name: String(recordName).trim() || "Traveler",
+    email: record?.email || "",
+    phone: record?.phone || record?.user_metadata?.phone || "",
+    role: record?.role || record?.user_metadata?.role || "user",
+    avatarColor:
+      record?.avatarColor ||
+      record?.avatar_color ||
+      record?.user_metadata?.avatar_color ||
+      randomAvatarColor(recordUsername),
+    bio: record?.bio || record?.user_metadata?.bio || "",
+    createdAt: record?.createdAt || record?.created_at,
+    lastLoginAt: record?.lastLoginAt || record?.last_sign_in_at || null,
+  };
+}
+
+async function fetchProfileByUserId(userId: string) {
+  if (!supabase) return null;
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (error && error.code !== "PGRST116") {
+    console.warn("Supabase profile fetch failed:", error.message);
+  }
+
+  return data || null;
+}
+
+async function fetchProfileByUsername(username: string) {
+  if (!supabase) return null;
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("email, username")
+    .eq("username", username.toLowerCase())
+    .maybeSingle();
+
+  if (error && error.code !== "PGRST116") {
+    console.warn("Supabase username lookup failed:", error.message);
+  }
+
+  return data || null;
+}
+
+async function ensureProfileRow(user: any) {
+  if (!supabase || !user) return;
+
+  try {
+    const payload = {
+      id: user.id,
+      email: user.email,
+      username: user.user_metadata?.username || user.email?.split("@")[0] || "traveler",
+      full_name: user.user_metadata?.name || user.email?.split("@")[0] || "Traveler",
+      phone: user.user_metadata?.phone || "",
+      bio: user.user_metadata?.bio || "",
+      avatar_color:
+        user.user_metadata?.avatar_color ||
+        randomAvatarColor(user.user_metadata?.username || user.email || "traveler"),
+      role: user.user_metadata?.role || "user",
+      created_at: new Date().toISOString(),
+    };
+
+    await supabase.from("profiles").upsert(payload, { onConflict: "id" });
+  } catch {
+    // Ignore profile row setup issues while Supabase is not yet provisioned.
+  }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -72,23 +175,87 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
-    const storedToken = localStorage.getItem(TOKEN_KEY);
-    const storedUser = localStorage.getItem(USER_KEY);
-    if (storedToken) setToken(storedToken);
-    if (storedUser) {
-      try {
-        setUser(JSON.parse(storedUser));
-      } catch {
-        localStorage.removeItem(USER_KEY);
+    const restoreSession = async () => {
+      const storedToken = localStorage.getItem(TOKEN_KEY);
+      const storedUser = localStorage.getItem(USER_KEY);
+
+      if (storedToken) setToken(storedToken);
+      if (storedUser) {
+        try {
+          setUser(JSON.parse(storedUser));
+        } catch {
+          localStorage.removeItem(USER_KEY);
+        }
       }
-    }
-    setIsAuthReady(true);
+
+      if (hasSupabaseConfig && supabase) {
+        try {
+          const {
+            data: { session },
+            error,
+          } = await supabase.auth.getSession();
+          if (error) throw error;
+
+          if (session?.access_token && session.user) {
+            const profile = await fetchProfileByUserId(session.user.id);
+            const nextUser = normalizeUserRecord({
+              ...session.user,
+              ...profile,
+              ...session.user.user_metadata,
+            });
+            setToken(session.access_token);
+            setUser(nextUser);
+            localStorage.setItem(TOKEN_KEY, session.access_token);
+            localStorage.setItem(USER_KEY, JSON.stringify(nextUser));
+          }
+        } catch {
+          localStorage.removeItem(TOKEN_KEY);
+          localStorage.removeItem(USER_KEY);
+        }
+      }
+
+      setIsAuthReady(true);
+    };
+
+    restoreSession();
+  }, []);
+
+  useEffect(() => {
+    if (!hasSupabaseConfig || !supabase) return;
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") {
+        clear();
+        return;
+      }
+
+      if (session?.user) {
+        const syncUser = async () => {
+          const profile = await fetchProfileByUserId(session.user.id);
+          const nextUser = normalizeUserRecord({
+            ...session.user,
+            ...profile,
+            ...session.user.user_metadata,
+          });
+          localStorage.setItem(TOKEN_KEY, session.access_token);
+          localStorage.setItem(USER_KEY, JSON.stringify(nextUser));
+          setToken(session.access_token);
+          setUser(nextUser);
+        };
+
+        void syncUser();
+      }
+    });
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
   }, []);
 
   const persist = useCallback((nextToken: string, nextUser: AppUser) => {
     localStorage.setItem(TOKEN_KEY, nextToken);
     localStorage.setItem(USER_KEY, JSON.stringify(nextUser));
-    setToken(nextToken);
+    setToken(nextToken || null);
     setUser(nextUser);
   }, []);
 
@@ -106,7 +273,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...((options.headers as Record<string, string>) || {}),
       };
       const currentToken = localStorage.getItem(TOKEN_KEY);
-      if (currentToken) headers.Authorization = `Bearer ${currentToken}`;
+      if (currentToken) {
+        headers.Authorization = `Bearer ${currentToken}`;
+      }
 
       const res = await fetch(path, { ...options, headers });
       if (res.status === 401) {
@@ -120,6 +289,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (identifier: string, password: string) => {
+      if (hasSupabaseConfig && supabase) {
+        const normalizedIdentifier = identifier.trim();
+
+        let email = normalizedIdentifier;
+        if (!email.includes("@")) {
+          const profile = await fetchProfileByUsername(normalizedIdentifier);
+          if (!profile?.email) {
+            throw new Error("No account was found for that username.");
+          }
+          email = profile.email;
+        }
+
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: email.toLowerCase(),
+          password,
+        });
+
+        if (error) throw new Error(error.message);
+
+        await ensureProfileRow(data.user);
+
+        const profile = await fetchProfileByUserId(data.user.id);
+        const nextUser = normalizeUserRecord({
+          ...data.user,
+          ...profile,
+          ...data.user.user_metadata,
+        });
+
+        persist(data.session?.access_token || "", nextUser);
+        return;
+      }
+
       const data = await parse(
         await fetch("/api/auth/login", {
           method: "POST",
@@ -140,6 +341,56 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       phone: string;
       password: string;
     }) => {
+      if (hasSupabaseConfig && supabase) {
+        const username = payload.username.trim();
+        const email = payload.email.trim().toLowerCase();
+        const name = payload.name.trim();
+        const phone = payload.phone.trim();
+        const avatarColor = randomAvatarColor(username || email);
+
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password: payload.password,
+          options: {
+            data: {
+              username: username.toLowerCase(),
+              name,
+              phone,
+              avatar_color: avatarColor,
+              bio: "",
+              role: "user",
+            },
+          },
+        });
+
+        if (error) throw new Error(error.message);
+
+        if (data.user) {
+          await ensureProfileRow(data.user);
+        }
+
+        const nextUser = normalizeUserRecord({
+          ...data.user,
+          ...data.user?.user_metadata,
+          email,
+          username: username.toLowerCase(),
+          name,
+          phone,
+          role: "user",
+          bio: "",
+          avatarColor,
+        });
+
+        if (data.session?.access_token) {
+          persist(data.session.access_token, nextUser);
+          return;
+        }
+
+        localStorage.setItem(USER_KEY, JSON.stringify(nextUser));
+        setUser(nextUser);
+        return;
+      }
+
       const data = await parse(
         await fetch("/api/auth/signup", {
           method: "POST",
@@ -154,15 +405,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     try {
-      const currentToken = localStorage.getItem(TOKEN_KEY);
-      if (currentToken) {
-        await fetch("/api/auth/logout", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${currentToken}`,
-          },
-        });
+      if (hasSupabaseConfig && supabase) {
+        const { error } = await supabase.auth.signOut();
+        if (error) throw error;
+      } else {
+        const currentToken = localStorage.getItem(TOKEN_KEY);
+        if (currentToken) {
+          await fetch("/api/auth/logout", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${currentToken}`,
+            },
+          });
+        }
       }
     } catch {
       // best effort audit log
@@ -171,7 +427,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [clear]);
 
   const refreshUser = useCallback(async () => {
+    if (hasSupabaseConfig && supabase) {
+      const {
+        data: { user },
+        error,
+      } = await supabase.auth.getUser();
+      if (error) throw error;
+
+      if (!user) {
+        clear();
+        return;
+      }
+
+      const profile = await fetchProfileByUserId(user.id);
+      const nextUser = normalizeUserRecord({
+        ...user,
+        ...profile,
+        ...user.user_metadata,
+      });
+      localStorage.setItem(USER_KEY, JSON.stringify(nextUser));
+      setUser(nextUser);
+      return;
+    }
+
     if (!localStorage.getItem(TOKEN_KEY)) return;
+
     try {
       const data = await api("/api/auth/me");
       localStorage.setItem(USER_KEY, JSON.stringify(data.user));
@@ -179,7 +459,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // ignore, session handled by api()
     }
-  }, [api]);
+  }, [api, clear]);
 
   return (
     <AuthContext.Provider

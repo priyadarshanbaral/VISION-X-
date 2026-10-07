@@ -169,7 +169,9 @@ function formatDate(date: Date): string {
 
 export function createChilikaItinerary(
   dateFrom?: string,
-  dateTo?: string
+  dateTo?: string,
+  foodPreference = 'No preference',
+  activityPreferences: string[] = []
 ): ChilikaItineraryDay[] {
   const today = new Date();
   const startDate = parseDate(dateFrom, today);
@@ -183,6 +185,26 @@ export function createChilikaItinerary(
     const date = new Date(startDate);
     date.setDate(startDate.getDate() + index);
     const plan = DAY_PLANS[Math.min(index, DAY_PLANS.length - 1)];
-    return { ...plan, date: formatDate(date) };
+    return {
+      ...plan,
+      date: formatDate(date),
+      activities: plan.activities.map((activity, activityIndex) => {
+        const prefersPlantBased = foodPreference === 'Vegetarian' || foodPreference === 'Vegan';
+        if (activity.type === 'food' && prefersPlantBased) {
+          return {
+            ...activity,
+            title: 'Local vegetarian Odia lunch',
+            description: foodPreference === 'Vegan'
+              ? 'Ask for rice, dalma, and seasonal vegetables prepared without ghee or dairy; confirm ingredients with the cook.'
+              : 'Ask for a seasonal vegetarian Odia thali with rice, dalma, and vegetables; confirm ingredients and price.'
+          };
+        }
+        const preferredActivity = activityPreferences[index % Math.max(activityPreferences.length, 1)];
+        if (activity.type === 'attraction' && preferredActivity && activityIndex === 2) {
+          return { ...activity, title: `${preferredActivity} around Chilika` };
+        }
+        return activity;
+      })
+    };
   });
 }

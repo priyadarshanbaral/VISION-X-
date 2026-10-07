@@ -76,15 +76,11 @@ export async function seedIfEmpty(database: Db) {
   }
 
   const logins = database.collection("logins");
-  if ((await logins.estimatedDocumentCount()) === 0) {
-    await logins.insertOne({
-      email: "demo@visionx.in",
-      password: "demo1234",
-      name: "Demo Traveller",
-      createdAt: new Date(),
-    });
-    console.log("[db] seeded logins: 1 document (demo user)");
-  }
+  await logins.updateMany(
+    { password: { $exists: true } },
+    { $unset: { password: "" } },
+  );
+  await logins.createIndex({ userId: 1, at: -1 });
 
   // Real accounts collection (username / email / hashed password)
   const users = database.collection("users");

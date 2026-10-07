@@ -5,8 +5,6 @@ import {
   Sparkles, Award, Clock, DollarSign 
 } from 'lucide-react';
 import CheckoutModal from '../components/CheckoutModal';
-import { db } from '../lib/firebase';
-import { collection, getDocs } from 'firebase/firestore';
 import { ODISHA_HANDICRAFTS, ODISHA_WORKSHOPS, HandicraftItem, WorkshopItem } from '../data/odishaData';
 
 export default function MarketplacePage() {
@@ -19,38 +17,41 @@ export default function MarketplacePage() {
   const [checkoutItem, setCheckoutItem] = useState({ name: '', price: '' });
 
   useEffect(() => {
+    let cancelled = false;
     async function fetchData() {
       try {
-        const craftsSnap = await getDocs(collection(db, 'handicrafts'));
-        const workshopsSnap = await getDocs(collection(db, 'workshops'));
+        // Read from the MongoDB-backed API; the server falls back to seeded data if needed.
+        const [craftRes, workshopRes] = await Promise.all([
+          fetch('/api/handicrafts'),
+          fetch('/api/workshops'),
+        ]);
+        if (!craftRes.ok || !workshopRes.ok) return;
 
-        const craftsData = craftsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any;
-        const workshopsData = workshopsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any;
+        const { handicrafts: craftsData = [] } = await craftRes.json();
+        const { workshops: workshopsData = [] } = await workshopRes.json();
+        if (cancelled) return;
 
-        if (craftsData.length > 0) {
-          setHandicrafts(craftsData);
-        }
-        if (workshopsData.length > 0) {
-          setWorkshops(workshopsData);
-        }
+        if (craftsData.length > 0) setHandicrafts(craftsData as any);
+        if (workshopsData.length > 0) setWorkshops(workshopsData as any);
       } catch (err) {
-        console.warn('Firestore marketplace fallback to curated Odisha data:', err);
+        console.warn('MongoDB marketplace fetch failed, using curated Odisha data:', err);
       }
     }
     fetchData();
+    return () => { cancelled = true; };
   }, []);
 
   const handleBuy = (item: HandicraftItem | { name: string; priceInr: number; priceUsd: number }) => {
-    const formattedPrice = currency === 'INR' 
-      ? `₹${item.priceInr.toLocaleString('en-IN')}` 
+    const formattedPrice = currency === 'INR'
+      ? `₹${item.priceInr.toLocaleString('en-IN')}`
       : `$${item.priceUsd}`;
     setCheckoutItem({ name: item.name, price: formattedPrice });
     setIsCheckoutOpen(true);
   };
 
   const handleBookWorkshop = (ws: WorkshopItem) => {
-    const formattedPrice = currency === 'INR' 
-      ? `₹${ws.priceInr.toLocaleString('en-IN')}` 
+    const formattedPrice = currency === 'INR'
+      ? `₹${ws.priceInr.toLocaleString('en-IN')}`
       : `$${ws.priceUsd}`;
     setCheckoutItem({ name: ws.title, price: formattedPrice });
     setIsCheckoutOpen(true);
@@ -59,7 +60,7 @@ export default function MarketplacePage() {
   return (
     <div className="min-h-screen bg-stone-50 py-12 px-4">
       <div className="max-w-7xl mx-auto">
-        
+
         {/* Header Banner */}
         <div className="flex flex-col md:flex-row md:items-end justify-between mb-12 gap-6">
           <div className="max-w-3xl">
@@ -110,8 +111,8 @@ export default function MarketplacePage() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
             {handicrafts.map((item) => (
-              <div 
-                key={item.id} 
+              <div
+                key={item.id}
                 className="bg-white rounded-3xl overflow-hidden shadow-sm border border-stone-200/80 hover:shadow-xl transition-all duration-300 hover:-translate-y-1.5 flex flex-col group"
               >
                 <div className="relative h-64 w-full overflow-hidden bg-stone-100">
@@ -123,7 +124,7 @@ export default function MarketplacePage() {
                     referrerPolicy="no-referrer"
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                  
+
                   {item.giTagged && (
                     <div className="absolute top-4 left-4 bg-amber-500 text-stone-950 text-[11px] font-black uppercase px-2.5 py-1 rounded-lg shadow-md border border-amber-300">
                       GI Tag Certified
@@ -140,7 +141,7 @@ export default function MarketplacePage() {
                   <div className="flex items-center gap-1 text-xs font-bold text-amber-700 uppercase tracking-wider mb-2">
                     <MapPin className="w-3.5 h-3.5" /> {item.village}, {item.district}
                   </div>
-                  
+
                   <h3 className="font-serif text-xl font-bold text-stone-900 mb-1 group-hover:text-amber-800 transition-colors">
                     {item.name}
                   </h3>
@@ -167,8 +168,8 @@ export default function MarketplacePage() {
                       <div className="text-[11px] text-stone-400 font-medium">Free domestic shipping</div>
                     </div>
 
-                    <button 
-                      onClick={() => handleBuy(item)} 
+                    <button
+                      onClick={() => handleBuy(item)}
                       className="bg-stone-900 hover:bg-stone-800 text-white px-5 py-2.5 rounded-xl font-bold text-xs transition-all shadow-md flex items-center gap-1.5 active:scale-95 cursor-pointer"
                     >
                       <ShoppingBag className="w-4 h-4 text-amber-400" />
@@ -194,17 +195,17 @@ export default function MarketplacePage() {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             {workshops.map((ws) => (
-              <div 
-                key={ws.id} 
+              <div
+                key={ws.id}
                 className="bg-white rounded-3xl overflow-hidden shadow-sm border border-stone-200 flex flex-col hover:shadow-xl transition-all duration-300 hover:-translate-y-1.5 group"
               >
                 <div className="relative w-full h-52 overflow-hidden">
-                  <Image 
-                    src={ws.image} 
-                    alt={ws.title} 
-                    fill 
-                    className="object-cover transition-transform duration-700 group-hover:scale-105" 
-                    referrerPolicy="no-referrer" 
+                  <Image
+                    src={ws.image}
+                    alt={ws.title}
+                    fill
+                    className="object-cover transition-transform duration-700 group-hover:scale-105"
+                    referrerPolicy="no-referrer"
                   />
                   <div className="absolute top-4 left-4 bg-black/75 backdrop-blur-md px-3 py-1 rounded-xl text-xs font-semibold text-white">
                     Max {ws.maxParticipants} Participants
@@ -217,7 +218,7 @@ export default function MarketplacePage() {
                       {ws.title}
                     </h3>
                     <p className="text-xs font-semibold text-amber-700 mb-3">Taught by {ws.masterArtisan}</p>
-                    
+
                     <p className="text-stone-600 text-xs leading-relaxed mb-4">
                       {ws.description}
                     </p>
@@ -249,9 +250,9 @@ export default function MarketplacePage() {
                       </span>
                       <span className="text-xs text-stone-500 block">per person</span>
                     </div>
-                    
-                    <button 
-                      onClick={() => handleBookWorkshop(ws)} 
+
+                    <button
+                      onClick={() => handleBookWorkshop(ws)}
                       className="bg-gradient-to-b from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-stone-950 font-bold px-4 py-2.5 rounded-xl text-xs transition-all shadow-sm active:scale-95 cursor-pointer"
                     >
                       Book Workshop Slot
@@ -265,8 +266,9 @@ export default function MarketplacePage() {
 
       </div>
 
-      <CheckoutModal 
-        isOpen={isCheckoutOpen} 
+      <CheckoutModal
+        isOpen={isCheckoutOpen}
+        bookingType="handicraft"
         onClose={() => setIsCheckoutOpen(false)} 
         itemName={checkoutItem.name} 
         price={checkoutItem.price} 

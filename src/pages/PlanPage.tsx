@@ -20,10 +20,55 @@ const ODISHA_INTERESTS = [
   'Pattachitra & Handloom Crafts',
   'Chilika Wildlife & Nature',
   'Beaches & Coastal Drives',
-  'Royal Palaces'
+  'Royal Palaces',
+  'Waterfalls & Nature',
+  'Photography',
+  'Adventure',
+  'Spirituality',
+  'Local Culture',
+  'Family Activities',
+  'Shopping'
 ];
 
 const TRAVEL_STYLES = ['Relaxed', 'Moderate', 'Intensive Heritage'];
+const TRAVEL_MODES = [
+  { value: 'own', label: 'Own vehicle' },
+  { value: 'app', label: 'Book via app / cab' },
+  { value: 'public', label: 'Public transport' },
+  { value: 'train', label: 'Train' },
+  { value: 'bus', label: 'Bus' },
+  { value: 'flight', label: 'Flight' },
+  { value: 'rental', label: 'Rental car' }
+] as const;
+const FOOD_PREFERENCES = ['No preference', 'Vegetarian', 'Vegan', 'Non-vegetarian'] as const;
+const ACCOMMODATION_PREFERENCES = ['Budget', 'Comfort', 'Premium'] as const;
+const ACTIVITY_PREFERENCES = [
+  'Sightseeing',
+  'Museums',
+  'Nature walks',
+  'Boat rides',
+  'Craft workshops',
+  'Beach time',
+  'Wildlife'
+];
+
+type TravelMode = typeof TRAVEL_MODES[number]['value'];
+
+function getLocalDateString(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatPlannerCurrency(amountInr: number, currency: 'INR' | 'USD'): string {
+  const amount = currency === 'INR' ? amountInr : amountInr / 83;
+  return new Intl.NumberFormat(currency === 'INR' ? 'en-IN' : 'en-US', {
+    style: 'currency',
+    currency,
+    maximumFractionDigits: 0
+  }).format(amount);
+}
 
 interface Activity {
   time: string;
@@ -44,26 +89,66 @@ interface ItineraryDay {
 export default function PlanPage() {
   const { user, isAuthReady, api } = useAuth();
   const [destination, setDestination] = useState(ODISHA_ALL_DESTINATIONS[0]?.id ?? '');
-  const [dateFrom, setDateFrom] = useState(() => new Date().toISOString().split('T')[0]);
+  const [dateFrom, setDateFrom] = useState(() => getLocalDateString());
   const [dateTo, setDateTo] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 3);
-    return d.toISOString().split('T')[0];
+    return getLocalDateString(d);
   });
+  const [travelers, setTravelers] = useState(2);
   const [budgetInr, setBudgetInr] = useState(25000);
   const [currency, setCurrency] = useState<'INR' | 'USD'>('INR');
   const [selectedInterests, setSelectedInterests] = useState<string[]>(['Ancient Temples', 'Odia Cuisine & Mahaprasad']);
+  const [foodPreference, setFoodPreference] = useState<(typeof FOOD_PREFERENCES)[number]>('No preference');
+  const [accommodationPreference, setAccommodationPreference] = useState<(typeof ACCOMMODATION_PREFERENCES)[number]>('Comfort');
+  const [activityPreferences, setActivityPreferences] = useState<string[]>(['Sightseeing']);
   const [travelStyle, setTravelStyle] = useState('Moderate');
-  const [travelMode, setTravelMode] = useState<'own' | 'app'>('app');
+  const [travelMode, setTravelMode] = useState<TravelMode>('app');
 
   const [loading, setLoading] = useState(false);
   const [itinerary, setItinerary] = useState<ItineraryDay[] | null>(null);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
   const selectedDestination = ODISHA_ALL_DESTINATIONS.find(item => item.id === destination);
   const destinationTitle = selectedDestination?.name ?? destination;
   const isChilika = selectedDestination?.id === 'chilika-lake-satapada';
   const destinationHotels = selectedDestination?.nearbyHotels ?? [];
+  const tripDays = dateFrom && dateTo
+    ? Math.max(1, Math.floor((new Date(`${dateTo}T12:00:00`).getTime() - new Date(`${dateFrom}T12:00:00`).getTime()) / 86_400_000) + 1)
+    : 1;
+  const tripNights = Math.max(0, tripDays - 1);
+  const preferredListedHotel = selectedDestination?.nearbyHotels.find(hotel =>
+    accommodationPreference === 'Budget'
+      ? hotel.pricePerNightInr <= 3000
+      : accommodationPreference === 'Premium'
+        ? hotel.pricePerNightInr >= 5000
+        : hotel.pricePerNightInr > 3000 && hotel.pricePerNightInr < 5000
+  );
+  const hotelRate = preferredListedHotel?.pricePerNightInr
+    ?? (accommodationPreference === 'Budget' ? 1800 : accommodationPreference === 'Premium' ? 8000 : 3500);
+  const roomsNeeded = Math.ceil(travelers / 2);
+  const foodRatePerPerson = budgetInr < 15000 ? 450 : budgetInr < 40000 ? 850 : 1500;
+  const transportEstimate = selectedDestination
+    ? travelMode === 'own'
+      ? Math.round(selectedDestination.transit.nearestAirport.distanceKm * 2 / 18 * 100)
+      : travelMode === 'flight'
+        ? selectedDestination.transit.nearestAirport.taxiFareInr * 2 + travelers * 4000
+        : travelMode === 'train'
+          ? selectedDestination.transit.nearestRailway.fareInr * travelers * 2
+          : travelMode === 'bus' || travelMode === 'public'
+            ? selectedDestination.transit.busConnectivity.fareInr * travelers * 2
+            : selectedDestination.transit.nearestAirport.taxiFareInr * 2
+    : 0;
+  const accommodationEstimate = roomsNeeded * hotelRate * tripNights;
+  const foodEstimate = foodRatePerPerson * travelers * tripDays;
+  const activityEstimate = (selectedDestination
+    ? (Number(selectedDestination.entryFee.indian.match(/₹([\d,]+)/)?.[1]?.replace(/,/g, '')) || 300)
+    : 300) * travelers * Math.min(activityPreferences.length, tripDays);
+  const localTransportEstimate = tripDays * 600;
+  const miscellaneousEstimate = Math.round((accommodationEstimate + foodEstimate + activityEstimate + transportEstimate + localTransportEstimate) * 0.1);
+  const estimatedTotal = accommodationEstimate + foodEstimate + activityEstimate + transportEstimate + localTransportEstimate + miscellaneousEstimate;
+  const remainingBudget = budgetInr - estimatedTotal;
   const chilikaDestination = ODISHA_ALL_DESTINATIONS.find(item => item.id === 'chilika-lake-satapada');
   const chilikaStays = [
     ...(chilikaDestination?.nearbyHotels ?? []).map(hotel => ({
@@ -82,21 +167,50 @@ export default function PlanPage() {
       rating: resort.rating,
       highlights: resort.features
     }))
-  ];
-  const chilikaSeafood = ODISHA_CUISINE.filter(dish => dish.origin.toLowerCase().includes('chilika'));
+  ].sort((a, b) => {
+    const matches = (category: string) =>
+      accommodationPreference === 'Budget'
+        ? /OTDC|Comfort/i.test(category)
+        : accommodationPreference === 'Premium'
+          ? /Luxury|Eco Resort/i.test(category)
+          : /Comfort|OTDC/i.test(category);
+    return Number(matches(b.category)) - Number(matches(a.category)) || a.price - b.price;
+  });
+  const matchesFoodPreference = (dish: (typeof ODISHA_CUISINE)[number]) => {
+    if (foodPreference === 'Vegetarian' && dish.category === 'Seafood') return false;
+    if (foodPreference === 'Vegan' && /milk|cheese|ghee|curd|prawn|crab|fish/i.test(`${dish.name} ${dish.description}`)) return false;
+    if (foodPreference === 'Non-vegetarian' && dish.category !== 'Seafood') return false;
+    return true;
+  };
+  const chilikaSeafood = ODISHA_CUISINE.filter(dish =>
+    dish.origin.toLowerCase().includes('chilika') && matchesFoodPreference(dish)
+  );
   const destinationDishes = selectedDestination
     ? ODISHA_CUISINE.filter(dish =>
-      `${dish.origin} ${dish.mustTrySpot}`.toLowerCase().includes(selectedDestination.district.toLowerCase())
-      || selectedDestination.name.toLowerCase().includes(dish.id.split('-')[0])
+      matchesFoodPreference(dish)
+      && (
+        `${dish.origin} ${dish.mustTrySpot}`.toLowerCase().includes(selectedDestination.district.toLowerCase())
+        || selectedDestination.name.toLowerCase().includes(dish.id.split('-')[0])
+      )
     )
     : [];
   const recommendedDishes = destinationDishes.length > 0
     ? destinationDishes
-    : ODISHA_CUISINE.slice(0, 2);
+    : ODISHA_CUISINE.filter(matchesFoodPreference).slice(0, 2);
 
   // Checkout Modal State
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [checkoutItem, setCheckoutItem] = useState({ name: '', price: '' });
+  const recommendedHotels = [...destinationHotels].sort((a, b) => {
+    const matchesPreference = (category: string) =>
+      accommodationPreference === 'Budget'
+        ? /OTDC|Comfort/i.test(category)
+        : accommodationPreference === 'Premium'
+          ? /Luxury|Eco Resort/i.test(category)
+          : /Comfort|OTDC/i.test(category);
+    return Number(matchesPreference(b.category)) - Number(matchesPreference(a.category))
+      || a.pricePerNightInr - b.pricePerNightInr;
+  });
 
   const toggleInterest = (interest: string) => {
     setSelectedInterests(prev =>
@@ -104,9 +218,30 @@ export default function PlanPage() {
     );
   };
 
+  const toggleActivityPreference = (preference: string) => {
+    setActivityPreferences(prev =>
+      prev.includes(preference) ? prev.filter(item => item !== preference) : [...prev, preference]
+    );
+  };
+
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!destination || !dateFrom || !dateTo) return;
+    if (!destination || !dateFrom || !dateTo) {
+      setError('Choose a destination and both trip dates before generating your plan.');
+      return;
+    }
+    if (dateTo < dateFrom) {
+      setError('The end date cannot be earlier than the start date.');
+      return;
+    }
+    if (dateFrom < getLocalDateString()) {
+      setError('The start date cannot be in the past. Select today or a future date.');
+      return;
+    }
+    if (tripDays > 7) {
+      setError('Trips can currently be planned for up to 7 days. Shorten your dates and try again.');
+      return;
+    }
 
     setLoading(true);
     setError('');
@@ -130,6 +265,10 @@ export default function PlanPage() {
             interests: selectedInterests,
             travelStyle,
             travelMode,
+            travelers,
+            foodPreference,
+            accommodationPreference,
+            activityPreferences,
           }),
         });
 
@@ -144,10 +283,16 @@ export default function PlanPage() {
       }
 
       if (!generatedData && isChilika) {
-        generatedData = createChilikaItinerary(dateFrom, dateTo);
+        generatedData = createChilikaItinerary(dateFrom, dateTo, foodPreference, activityPreferences);
       }
       if (!generatedData) {
-        generatedData = createDestinationItinerary(destination, dateFrom, dateTo, travelMode);
+        generatedData = createDestinationItinerary(
+          destination,
+          dateFrom,
+          dateTo,
+          travelMode,
+          { interests: selectedInterests, foodPreference, activityPreferences }
+        );
       }
 
       // If backend didn't return data, try client direct GenAI if key available
@@ -158,9 +303,13 @@ export default function PlanPage() {
           const prompt = `You are an expert Odisha Tourism AI Planner.
 Generate a detailed travel itinerary for ${destinationTitle}, Odisha, India from ${dateFrom} to ${dateTo}.
 Budget: ₹${budgetInr}.
+Travelers: ${travelers}.
 User interests: ${selectedInterests.join(', ') || 'Temples and crafts'}.
+Food preference: ${foodPreference}.
+Accommodation preference: ${accommodationPreference}.
+Preferred activities: ${activityPreferences.join(', ') || 'General sightseeing'}.
 Travel style: ${travelStyle}.
-Travel mode: ${travelMode === 'own' ? 'Traveling with own personal vehicle. Do not suggest booking transit.' : 'App transport: suggest Vande Bharat Express, Mo Bus AC, or Marine Drive cabs.'}
+Travel mode: ${travelMode === 'own' ? 'Traveling with own personal vehicle. Do not suggest booking transit.' : travelMode}.
 
 STRICT RULE: All locations must be in Odisha, India. Include authentic Odia cuisine stops (Abhada, Chhena Poda, Dahi Bara) and artisan stops (Raghurajpur, Pipili, Cuttack Tarakasi).
 Provide realistic coastal weather.`;
@@ -325,6 +474,33 @@ Provide realistic coastal weather.`;
       setSaved(true);
     } catch (err: any) {
       console.error('Error saving itinerary:', err);
+      setError(err?.message || 'Could not save this itinerary. Please try again.');
+    }
+  };
+
+  const handleShareItinerary = async () => {
+    if (!itinerary) return;
+    const tripSummary = [
+      `${destinationTitle} · ${tripDays} days / ${tripNights} nights`,
+      `${dateFrom} to ${dateTo} · ${travelers} traveler${travelers === 1 ? '' : 's'}`,
+      `Interests: ${selectedInterests.join(', ') || 'General sightseeing'}`,
+      ...itinerary.map((day, index) => `Day ${index + 1} (${day.date}): ${day.dayTheme}`)
+    ].join('\n');
+
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: `Trip plan: ${destinationTitle}`, text: tripSummary });
+        setShareCopied(false);
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(tripSummary);
+        setShareCopied(true);
+      } else {
+        setError('Sharing is not supported by this browser. You can print or save the trip instead.');
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      console.error('Error sharing itinerary:', err);
+      setError('Could not share this itinerary. Please try again.');
     }
   };
 
@@ -383,7 +559,7 @@ Provide realistic coastal weather.`;
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           
           {/* Form Settings */}
-          <div className="lg:col-span-4">
+          <div className="lg:col-span-4 print:hidden">
             <div className="bg-white rounded-3xl p-6 md:p-8 shadow-sm border border-stone-200 lg:sticky lg:top-24">
               <div className="flex items-center justify-between mb-6">
                 <h2 className="font-serif text-2xl font-bold text-stone-900">Tour Preferences</h2>
@@ -406,40 +582,27 @@ Provide realistic coastal weather.`;
               </div>
 
               <form onSubmit={handleGenerate} className="space-y-6">
-                {/* Travel Mode */}
+                {/* Travel mode and group size */}
                 <div>
                   <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-2">How are you traveling?</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setTravelMode('own')}
-                      className={`p-3 rounded-2xl border-2 text-left transition-all cursor-pointer ${
-                        travelMode === 'own' 
-                          ? 'border-amber-500 bg-amber-50/70 text-amber-950 font-bold' 
-                          : 'border-stone-200 bg-stone-50 text-stone-600'
-                      }`}
-                    >
-                      <div className="flex items-center gap-1.5 mb-1 text-xs">
-                        <MapPin className="w-3.5 h-3.5 text-amber-700" /> Own Vehicle
-                      </div>
-                      <div className="text-[11px] text-stone-500">Personal Car/Bike</div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setTravelMode('app')}
-                      className={`p-3 rounded-2xl border-2 text-left transition-all cursor-pointer ${
-                        travelMode === 'app' 
-                          ? 'border-amber-500 bg-amber-50/70 text-amber-950 font-bold' 
-                          : 'border-stone-200 bg-stone-50 text-stone-600'
-                      }`}
-                    >
-                      <div className="flex items-center gap-1.5 mb-1 text-xs">
-                        <Plane className="w-3.5 h-3.5 text-amber-700" /> Book via App
-                      </div>
-                      <div className="text-[11px] text-stone-500">Mo Bus, Vande Bharat, Cab</div>
-                    </button>
-                  </div>
+                  <select
+                    value={travelMode}
+                    onChange={(e) => setTravelMode(e.target.value as TravelMode)}
+                    className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3.5 py-3 text-xs font-semibold text-stone-800 focus:bg-white focus:ring-2 focus:ring-amber-500"
+                  >
+                    {TRAVEL_MODES.map(mode => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
+                  </select>
+                  <label className="mt-4 block text-xs font-bold uppercase tracking-wider text-stone-700" htmlFor="planner-travelers">Number of travelers</label>
+                  <input
+                    id="planner-travelers"
+                    type="number"
+                    min="1"
+                    max="20"
+                    required
+                    value={travelers}
+                    onChange={(e) => setTravelers(Math.min(20, Math.max(1, Number(e.target.value))))}
+                    className="mt-2 w-full rounded-xl border border-stone-200 bg-stone-50 px-3.5 py-3 text-xs font-semibold text-stone-800"
+                  />
                 </div>
 
                 {/* Odisha destinations */}
@@ -469,8 +632,12 @@ Provide realistic coastal weather.`;
                     <input
                       type="date"
                       required
+                      min={getLocalDateString()}
                       value={dateFrom}
-                      onChange={(e) => setDateFrom(e.target.value)}
+                      onChange={(e) => {
+                        setDateFrom(e.target.value);
+                        if (e.target.value > dateTo) setDateTo(e.target.value);
+                      }}
                       className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-xs font-medium text-stone-700"
                     />
                   </div>
@@ -479,11 +646,16 @@ Provide realistic coastal weather.`;
                     <input
                       type="date"
                       required
+                      min={dateFrom}
                       value={dateTo}
                       onChange={(e) => setDateTo(e.target.value)}
                       className="w-full px-3 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-xs font-medium text-stone-700"
                     />
                   </div>
+                  <p className="text-xs font-semibold text-stone-600">
+                    Your trip: <span className="text-stone-900">{tripDays} day{tripDays === 1 ? '' : 's'} / {tripNights} night{tripNights === 1 ? '' : 's'}</span>
+                    {tripDays > 7 && <span className="ml-1 text-red-700"> (maximum 7 days)</span>}
+                  </p>
                 </div>
 
                 {/* Interests */}
@@ -507,6 +679,49 @@ Provide realistic coastal weather.`;
                   </div>
                 </div>
 
+                <div>
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-stone-700">Food preference</label>
+                  <select
+                    value={foodPreference}
+                    onChange={(e) => setFoodPreference(e.target.value as (typeof FOOD_PREFERENCES)[number])}
+                    className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3.5 py-3 text-xs font-semibold text-stone-800"
+                  >
+                    {FOOD_PREFERENCES.map(option => <option key={option} value={option}>{option}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-stone-700">Accommodation</label>
+                  <select
+                    value={accommodationPreference}
+                    onChange={(e) => setAccommodationPreference(e.target.value as (typeof ACCOMMODATION_PREFERENCES)[number])}
+                    className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3.5 py-3 text-xs font-semibold text-stone-800"
+                  >
+                    {ACCOMMODATION_PREFERENCES.map(option => <option key={option} value={option}>{option}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-xs font-bold uppercase tracking-wider text-stone-700">Activities</label>
+                  <div className="flex flex-wrap gap-2">
+                    {ACTIVITY_PREFERENCES.map(preference => (
+                      <button
+                        key={preference}
+                        type="button"
+                        onClick={() => toggleActivityPreference(preference)}
+                        aria-pressed={activityPreferences.includes(preference)}
+                        className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                          activityPreferences.includes(preference)
+                            ? 'bg-teal-800 text-white'
+                            : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
+                        }`}
+                      >
+                        {preference}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 {/* Budget */}
                 <div>
                   <div className="flex justify-between mb-2">
@@ -518,7 +733,7 @@ Provide realistic coastal weather.`;
                   <input
                     type="range"
                     min="5000"
-                    max="100000"
+                    max="200000"
                     step="5000"
                     value={budgetInr}
                     onChange={(e) => setBudgetInr(Number(e.target.value))}
@@ -526,7 +741,7 @@ Provide realistic coastal weather.`;
                   />
                   <div className="flex justify-between text-[11px] font-bold text-stone-400 mt-1">
                     <span>₹5,000</span>
-                    <span>₹1,00,000+</span>
+                    <span>₹2,00,000+</span>
                   </div>
                 </div>
 
@@ -720,7 +935,7 @@ Provide realistic coastal weather.`;
                         </h3>
                         {destinationHotels.length > 0 ? (
                           <div className="space-y-3">
-                            {destinationHotels.slice(0, 3).map(hotel => (
+                            {recommendedHotels.slice(0, 3).map(hotel => (
                               <div key={hotel.name} className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
                                 <div className="flex flex-wrap items-start justify-between gap-2">
                                   <div>
@@ -904,7 +1119,11 @@ Provide realistic coastal weather.`;
                           <div className="rounded-xl bg-emerald-100 p-2.5 text-emerald-800"><Utensils className="h-5 w-5" /></div>
                           <div>
                             <h3 className="font-serif text-xl font-bold text-stone-900">What to eat</h3>
-                            <p className="text-xs text-stone-500">Local lagoon catch and Odia comfort food</p>
+                            <p className="text-xs text-stone-500">
+                              {foodPreference === 'Vegetarian' || foodPreference === 'Vegan'
+                                ? `${foodPreference} options around the lagoon`
+                                : 'Local lagoon catch and Odia comfort food'}
+                            </p>
                           </div>
                         </div>
                         <div className="space-y-3">
@@ -917,13 +1136,23 @@ Provide realistic coastal weather.`;
                           ))}
                           <div className="rounded-2xl border border-stone-200 bg-stone-50 p-4">
                             <h4 className="text-sm font-bold text-stone-900">Also ask for</h4>
-                            <p className="mt-1 text-xs leading-relaxed text-stone-600">Fresh lake fish fry, seasonal prawns, rice with dalma, and pakhala when available. Ask what is freshly landed; request a vegetarian meal if preferred.</p>
+                            <p className="mt-1 text-xs leading-relaxed text-stone-600">
+                              {foodPreference === 'Vegan'
+                                ? 'Ask for rice, dalma, and seasonal vegetables prepared without ghee or dairy; confirm ingredients with the cook.'
+                                : foodPreference === 'Vegetarian'
+                                  ? 'Ask for a seasonal vegetarian Odia thali with rice, dalma, and vegetables; confirm ingredients with the cook.'
+                                  : foodPreference === 'Non-vegetarian'
+                                    ? 'Ask what fish, prawns, or crab are freshly available and confirm the catch, preparation, and price.'
+                                    : 'Fresh lake fish fry, seasonal prawns, rice with dalma, and pakhala may be available. Ask what is freshly landed and confirm the price.'}
+                            </p>
                           </div>
                         </div>
-                        <div className="mt-4 flex gap-2 rounded-xl bg-sky-50 p-3 text-xs leading-relaxed text-sky-950">
-                          <Leaf className="mt-0.5 h-4 w-4 shrink-0 text-sky-700" />
-                          Choose legal, in-season catch and avoid buying protected wildlife or undersized catch.
-                        </div>
+                        {foodPreference !== 'Vegetarian' && foodPreference !== 'Vegan' && (
+                          <div className="mt-4 flex gap-2 rounded-xl bg-sky-50 p-3 text-xs leading-relaxed text-sky-950">
+                            <Leaf className="mt-0.5 h-4 w-4 shrink-0 text-sky-700" />
+                            Choose legal, in-season catch and avoid buying protected wildlife or undersized catch.
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -954,7 +1183,23 @@ Provide realistic coastal weather.`;
                 )}
 
                 {/* Save Itinerary Action */}
-                <div className="flex justify-end">
+                <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => window.print()}
+                      className="rounded-xl border border-stone-300 bg-white px-4 py-3 text-xs font-bold text-stone-800 transition hover:bg-stone-50"
+                    >
+                      Print / Save PDF
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleShareItinerary}
+                      className="rounded-xl border border-stone-300 bg-white px-4 py-3 text-xs font-bold text-stone-800 transition hover:bg-stone-50"
+                    >
+                      {shareCopied ? 'Trip details copied' : 'Share trip'}
+                    </button>
+                  </div>
                   {user ? (
                     <button 
                       onClick={handleSaveItinerary}
@@ -974,6 +1219,48 @@ Provide realistic coastal weather.`;
                     </Link>
                   )}
                 </div>
+
+                <section aria-label="Estimated trip budget" className="rounded-3xl border border-stone-200 bg-white p-6 shadow-sm md:p-7">
+                  <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-serif text-xl font-bold text-stone-900">Estimated trip budget</h3>
+                      <p className="mt-1 text-xs text-stone-500">
+                        {tripDays} days · {tripNights} nights · {travelers} traveler{travelers === 1 ? '' : 's'} · planning estimate
+                      </p>
+                    </div>
+                    <span className="text-lg font-black text-stone-900">{formatPlannerCurrency(estimatedTotal, currency)}</span>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    {[
+                      ['Accommodation', accommodationEstimate],
+                      ['Travel', transportEstimate],
+                      ['Local transport', localTransportEstimate],
+                      ['Food', foodEstimate],
+                      ['Entry & activities', activityEstimate],
+                      ['Miscellaneous', miscellaneousEstimate]
+                    ].map(([label, amount]) => (
+                      <div key={label} className="rounded-xl bg-stone-50 p-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-stone-500">{label}</p>
+                        <p className="mt-1 text-sm font-bold text-stone-900">{formatPlannerCurrency(Number(amount), currency)}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className={`mt-4 rounded-xl p-4 text-sm font-semibold ${remainingBudget >= 0 ? 'bg-emerald-50 text-emerald-900' : 'bg-amber-50 text-amber-950'}`}>
+                    {remainingBudget >= 0
+                      ? `Estimated remaining budget: ${formatPlannerCurrency(remainingBudget, currency)}`
+                      : `Your selected preferences exceed your budget by ${formatPlannerCurrency(Math.abs(remainingBudget), currency)}.`}
+                  </div>
+                  {remainingBudget < 0 && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button type="button" onClick={() => setAccommodationPreference('Budget')} className="rounded-lg border border-amber-300 px-3 py-2 text-xs font-bold text-amber-950 hover:bg-amber-100">Reduce hotel category</button>
+                      <button type="button" onClick={() => setTravelMode('public')} className="rounded-lg border border-amber-300 px-3 py-2 text-xs font-bold text-amber-950 hover:bg-amber-100">Use public transport</button>
+                      <button type="button" onClick={() => setActivityPreferences([])} className="rounded-lg border border-amber-300 px-3 py-2 text-xs font-bold text-amber-950 hover:bg-amber-100">Remove paid activity estimates</button>
+                    </div>
+                  )}
+                  <p className="mt-3 text-[11px] leading-relaxed text-stone-500">
+                    Estimates use destination reference data and your selected preferences; confirm live fares, room rates, tickets, and opening times before booking.
+                  </p>
+                </section>
 
                 {/* Daily Timeline */}
                 {itinerary.map((day, dayIdx) => (
@@ -1053,6 +1340,7 @@ Provide realistic coastal weather.`;
         onClose={() => setIsCheckoutOpen(false)} 
         itemName={checkoutItem.name} 
         price={checkoutItem.price} 
+        bookingType="itinerary"
       />
     </div>
   );

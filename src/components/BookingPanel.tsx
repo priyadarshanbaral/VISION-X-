@@ -253,6 +253,7 @@ export default function BookingPanel() {
         onClose={() => setIsCheckoutOpen(false)} 
         itemName={checkoutItem.name} 
         price={checkoutItem.price} 
+        bookingType="transit"
       />
     </div>
   );

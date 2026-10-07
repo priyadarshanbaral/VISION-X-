@@ -46,7 +46,7 @@ app.get('/api/db/status', async (_req, res) => {
   if (!database) {
     return res.json({ success: true, connected: false, storage: 'in-memory fallback', collections: {} });
   }
-  const names = ['destinations', 'monuments', 'handicrafts', 'workshops', 'resorts', 'festivals', 'cuisine', 'packages', 'weddings', 'transit', 'logins'];
+  const names = ['destinations', 'monuments', 'handicrafts', 'workshops', 'resorts', 'festivals', 'cuisine', 'packages', 'weddings', 'transit', 'users', 'logins', 'activity', 'bookings', 'wishlist', 'itineraries'];
   const collections: Record<string, number> = {};
   for (const name of names) {
     collections[name] = await database.collection(name).countDocuments();
@@ -82,8 +82,8 @@ app.post('/api/auth/signup', async (req, res) => {
     if (!db) return res.status(503).json({ success: false, error: 'Database unavailable' });
 
     const users = db.collection('users');
-    const lowerEmail = String(email).toLowerCase();
-    const lowerUser = String(username).toLowerCase();
+    const lowerEmail = String(email).trim().toLowerCase();
+    const lowerUser = String(username).trim().toLowerCase();
 
     if (await users.findOne({ email: lowerEmail } as any)) {
       return res.status(409).json({ success: false, error: 'An account with this email already exists' });
@@ -92,8 +92,9 @@ app.post('/api/auth/signup', async (req, res) => {
       return res.status(409).json({ success: false, error: 'This username is already taken' });
     }
 
+    const createdAt = new Date();
     const doc = {
-      username: String(username).toLowerCase(),
+      username: lowerUser,
       name: String(name).trim(),
       email: lowerEmail,
       phone: String(phone).trim(),
@@ -103,14 +104,27 @@ app.post('/api/auth/signup', async (req, res) => {
       bio: '',
       bookings: [],
       wishlist: [],
-      createdAt: new Date(),
-      lastLoginAt: null as Date | null,
+      createdAt,
+      lastLoginAt: createdAt,
     };
 
     const result = await users.insertOne(doc as any);
     const token = createToken(String(result.insertedId));
     res.status(201).json({ success: true, token, user: sanitizeUser({ ...doc, _id: result.insertedId }) });
   } catch (err: any) {
+    if (err?.code === 11000) {
+      const field = err.keyPattern?.email
+        ? 'email'
+        : err.keyPattern?.username
+          ? 'username'
+          : null;
+      const message = field === 'email'
+        ? 'An account with this email already exists'
+        : field === 'username'
+          ? 'This username is already taken'
+          : 'An account with this email or username already exists';
+      return res.status(409).json({ success: false, error: message });
+    }
     console.error('signup error:', err);
     res.status(500).json({ success: false, error: 'Could not create account' });
   }
@@ -135,9 +149,22 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Invalid login details. Please check your credentials.' });
     }
 
-    await users.updateOne({ _id: user._id } as any, { $set: { lastLoginAt: new Date() } });
+    const loginAt = new Date();
+    await users.updateOne({ _id: user._id } as any, { $set: { lastLoginAt: loginAt } });
+    await db.collection('logins').insertOne({
+      userId: String(user._id),
+      username: user.username,
+      email: user.email,
+      at: loginAt,
+    } as any);
+    await db.collection('activity').insertOne({
+      userId: String(user._id),
+      action: 'login',
+      at: loginAt,
+    } as any);
+    const updatedUser = await users.findOne({ _id: user._id } as any);
     const token = createToken(String(user._id));
-    res.json({ success: true, token, user: sanitizeUser(user) });
+    res.json({ success: true, token, user: sanitizeUser(updatedUser) });
   } catch (err: any) {
     console.error('login error:', err);
     res.status(500).json({ success: false, error: 'Could not sign in' });
@@ -461,7 +488,10 @@ app.get('/api/transit/search', async (req, res) => {
 // API route: AI Odisha Travel Planner
 app.post('/api/plan', async (req, res) => {
   try {
-    const { destination, destinationName, dateFrom, dateTo, budget, interests, travelStyle, travelMode } = req.body;
+    const {
+      destination, destinationName, dateFrom, dateTo, budget, interests, travelStyle, travelMode,
+      travelers, foodPreference, accommodationPreference, activityPreferences
+    } = req.body;
     const destinationId = String(destination || '');
     const destinationLabel = String(destinationName || destinationId);
 
@@ -470,19 +500,17 @@ app.post('/api/plan', async (req, res) => {
       ? destinationLabel
       : `${destinationLabel || 'Bhubaneswar, Puri & Konark'}, Odisha, India`;
 
-    if (destinationId === 'chilika-lake-satapada') {
-      return res.json({ success: true, itinerary: createChilikaItinerary(dateFrom, dateTo) });
-    }
-
-    const curatedDestinationItinerary = createDestinationItinerary(
-      destinationId,
-      dateFrom,
-      dateTo,
-      travelMode === 'own' ? 'own' : 'app'
-    );
-    if (curatedDestinationItinerary.length > 0) {
-      return res.json({ success: true, itinerary: curatedDestinationItinerary });
-    }
+    const allowedTravelModes = ['own', 'app', 'public', 'train', 'bus', 'flight', 'rental'] as const;
+    const normalizedTravelMode = allowedTravelModes.find(mode => mode === travelMode) ?? 'app';
+    const curatedDestinationItinerary = destinationId === 'chilika-lake-satapada'
+      ? createChilikaItinerary(dateFrom, dateTo, foodPreference, activityPreferences)
+      : createDestinationItinerary(
+        destinationId,
+        dateFrom,
+        dateTo,
+        normalizedTravelMode,
+        { interests, foodPreference, activityPreferences }
+      );
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (apiKey) {
@@ -492,14 +520,21 @@ app.post('/api/plan', async (req, res) => {
 Plan a bespoke, authentic, high-end travel itinerary for "${targetDestination}" from ${dateFrom} to ${dateTo}.
 Budget: ₹${budget || 25000} (or equivalent in USD).
 User interests: ${Array.isArray(interests) ? interests.join(', ') : 'Temples, Pattachitra crafts, pristine beaches, and culinary heritage'}.
+Travelers: ${Number.isFinite(Number(travelers)) ? Number(travelers) : 1}.
+Food preference: ${foodPreference || 'No preference'}.
+Accommodation preference: ${accommodationPreference || 'Comfort'}.
+Preferred activities: ${Array.isArray(activityPreferences) ? activityPreferences.join(', ') : 'General sightseeing'}.
 Travel style: ${travelStyle || 'Moderate'}.
-Travel mode: ${travelMode === 'own' ? 'Traveling by personal vehicle / bike. Avoid booking transit.' : 'App transit: suggest Mo Bus, Vande Bharat Express, private heritage cabs, or Chilika catamarans.'}
+Travel mode: ${travelMode === 'own' ? 'Traveling by personal vehicle / bike. Avoid booking transit.' : travelMode || 'Book via app / cab'}.
+Generate one itinerary day per calendar day in the selected date range. Adapt activity density to the selected pace and keep the total plan realistic for the budget.
+Honor dietary requirements: do not recommend seafood for vegetarian or vegan travelers, and do not recommend animal products for vegan travelers.
 
 STRICT ODISHA REQUIREMENT:
 All locations MUST be in Odisha, India (e.g. Konark Sun Temple, Puri Jagannath Temple, Lingaraj Temple, Dhauli Stupa, Raghurajpur Craft Village, Chilika Lake Satapada, Pipili, Similipal, Daringbadi, Cuttack Tarakasi).
-Food stops MUST feature authentic Odia cuisine: Puri Mahaprasad (Anandabazar), Chhena Poda, Dalma, Pahal Rasagola, Cuttack Dahi Bara Aloo Dum, or Chilika Crab/Prawns.
+Food stops should feature authentic Odia cuisine appropriate to the selected food preference.
 Craft stops MUST feature verified Odisha artisans: Pattachitra, Pipili Chandua, Sambalpuri Ikat, Cuttack Silver Filigree, or Dhokra bell metal.
-Weather: realistic coastal/tropical Odisha weather (e.g. 'Sunny & Coastal Breeze, 28°C').`;
+Do not present weather as a live forecast; use general seasonal guidance and tell the traveler to check a live forecast.
+Weather: use the value 'Check the local forecast before travel' unless a live forecast is explicitly available.`;
 
         const response = await ai.models.generateContent({
           model: 'gemini-2.5-flash',
@@ -539,11 +574,17 @@ Weather: realistic coastal/tropical Odisha weather (e.g. 'Sunny & Coastal Breeze
 
         if (response.text) {
           const data = JSON.parse(response.text);
-          return res.json({ success: true, itinerary: data });
+          if (Array.isArray(data) && data.length > 0) {
+            return res.json({ success: true, itinerary: data });
+          }
         }
       } catch (geminiErr) {
         console.warn('Gemini API call failed, falling back to curated Odisha plan:', geminiErr);
       }
+    }
+
+    if (curatedDestinationItinerary.length > 0) {
+      return res.json({ success: true, itinerary: curatedDestinationItinerary });
     }
 
     // High quality curated Odisha Golden Triangle fallback plan

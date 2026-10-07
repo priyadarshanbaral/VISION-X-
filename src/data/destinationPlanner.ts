@@ -18,6 +18,14 @@ export interface DestinationItineraryDay {
   activities: DestinationActivity[];
 }
 
+export interface DestinationItineraryPreferences {
+  interests?: string[];
+  foodPreference?: string;
+  activityPreferences?: string[];
+}
+
+export type DestinationTravelMode = 'own' | 'app' | 'public' | 'train' | 'bus' | 'flight' | 'rental';
+
 function parseDate(value: string | undefined, fallback: Date): Date {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return fallback;
   const date = new Date(`${value}T12:00:00`);
@@ -43,41 +51,66 @@ function distanceKm(from: TouristDestination, to: TouristDestination): number {
   return 6371 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 }
 
-function getNearbyDestinations(destination: TouristDestination): TouristDestination[] {
+function getNearbyDestinations(destination: TouristDestination, interests: string[] = []): TouristDestination[] {
   return ODISHA_ALL_DESTINATIONS
     .filter(item => item.id !== destination.id && distanceKm(destination, item) <= 120)
-    .sort((a, b) => distanceKm(destination, a) - distanceKm(destination, b))
+    .sort((a, b) => {
+      const score = (item: TouristDestination) => {
+        const details = `${item.category} ${item.tagline} ${item.description} ${item.significance}`.toLowerCase();
+        return interests.reduce((total, interest) => {
+          const words = interest.toLowerCase().split(/\s+/).filter(word => word.length > 3);
+          return total + (words.some(word => details.includes(word)) ? 1 : 0);
+        }, 0);
+      };
+      return score(b) - score(a) || distanceKm(destination, a) - distanceKm(destination, b);
+    })
     .slice(0, 6);
 }
 
-function getLocalFood(destination: TouristDestination): string {
+function getLocalFood(destination: TouristDestination, preference = 'No preference'): string {
   const district = destination.district.toLowerCase();
-  const dish = ODISHA_CUISINE.find(item =>
+  const suitableDishes = ODISHA_CUISINE.filter(item => {
+    if (preference === 'Vegetarian' && item.category === 'Seafood') return false;
+    if (preference === 'Vegan' && /milk|cheese|ghee|curd|prawn|crab|fish/i.test(`${item.name} ${item.description}`)) return false;
+    if (preference === 'Non-vegetarian' && item.category !== 'Seafood') return false;
+    return true;
+  });
+  const dish = suitableDishes.find(item =>
     `${item.origin} ${item.mustTrySpot}`.toLowerCase().includes(district)
   );
   return dish
     ? `${dish.name}: ${dish.description} Ask locally about current availability and price.`
-    : 'Try a local Odia meal such as rice, dalma, and seasonal vegetables; ask your host which regional dishes are in season.';
+    : preference === 'Vegan'
+      ? 'Ask for a plant-based Odia meal of rice, dalma, and seasonal vegetables prepared without ghee or dairy.'
+      : 'Try a local Odia meal such as rice, dalma, and seasonal vegetables; ask your host which regional dishes are in season.';
 }
 
 function createDayPlan(
   destination: TouristDestination,
   focalDestination: TouristDestination,
   dayIndex: number,
-  travelMode: 'own' | 'app'
+  travelMode: DestinationTravelMode,
+  preferences: DestinationItineraryPreferences
 ): Omit<DestinationItineraryDay, 'date'> {
   const nearestRail = destination.transit.nearestRailway;
+  const transportGuidance = travelMode === 'own'
+    ? 'Start from your stay by personal vehicle. Check current road conditions and plan fuel stops.'
+    : travelMode === 'train'
+      ? `Check current train availability to ${nearestRail.station}, then arrange onward ${nearestRail.mode.toLowerCase()} locally. Confirm current schedules and fares.`
+      : travelMode === 'flight'
+        ? `Check current flights to ${destination.transit.nearestAirport.name}, then arrange an onward transfer. Confirm schedules and fares.`
+        : travelMode === 'bus' || travelMode === 'public'
+          ? `Check local bus services for ${destination.transit.busConnectivity.route}; listed operators include ${destination.transit.busConnectivity.operators}. Confirm current routes and fares.`
+          : `Arrange a local transfer and confirm the route, fare, and availability with the operator before travel.`;
   const tip = destination.travelTips[dayIndex % Math.max(destination.travelTips.length, 1)];
   const activities: DestinationActivity[] = [
     {
       time: '07:30 AM',
       title: travelMode === 'own' ? 'Breakfast and start your day by road' : 'Arrange your local transfer',
-      description: travelMode === 'own'
-        ? `Start from your stay with water and sun protection. Use the listed route as a guide and check current road conditions.`
-        : `The listed rail gateway is ${nearestRail.station}. Arrange onward ${nearestRail.mode.toLowerCase()} locally and confirm current services and fares.`,
+      description: transportGuidance,
       location: `${destination.district}, Odisha`,
       type: 'transport',
-      transportBookingAvailable: travelMode === 'app'
+      transportBookingAvailable: travelMode === 'app' || travelMode === 'rental'
     },
     {
       time: '09:00 AM',
@@ -89,17 +122,18 @@ function createDayPlan(
     {
       time: '01:00 PM',
       title: `Local Odia lunch near ${focalDestination.name}`,
-      description: getLocalFood(focalDestination),
+      description: getLocalFood(focalDestination, preferences.foodPreference),
       location: focalDestination.district,
       type: 'food'
     }
   ];
 
   if (tip) {
+    const preferredActivity = preferences.activityPreferences?.[dayIndex % Math.max(preferences.activityPreferences.length, 1)];
     activities.push({
       time: '03:30 PM',
-      title: dayIndex === 0 ? 'Use a local travel tip for your afternoon' : 'Explore at an unhurried pace',
-      description: `${tip} Confirm access and travel time locally; skip this stop if it makes the route rushed.`,
+      title: preferredActivity ? `Plan time for ${preferredActivity.toLowerCase()}` : dayIndex === 0 ? 'Use a local travel tip for your afternoon' : 'Explore at an unhurried pace',
+      description: `${tip} Confirm local availability, access, and travel time; skip this stop if it makes the route rushed.`,
       location: focalDestination.name,
       type: 'attraction'
     });
@@ -126,7 +160,8 @@ export function createDestinationItinerary(
   destinationId: string,
   dateFrom?: string,
   dateTo?: string,
-  travelMode: 'own' | 'app' = 'app'
+  travelMode: DestinationTravelMode = 'app',
+  preferences: DestinationItineraryPreferences = {}
 ): DestinationItineraryDay[] {
   const destination = ODISHA_ALL_DESTINATIONS.find(item => item.id === destinationId)
     ?? ODISHA_ALL_DESTINATIONS.find(item => item.name === destinationId);
@@ -140,7 +175,10 @@ export function createDestinationItinerary(
     7,
     Math.max(1, Math.floor((endDate.getTime() - startDate.getTime()) / 86_400_000) + 1)
   );
-  const nearbyDestinations = getNearbyDestinations(destination);
+  const nearbyDestinations = getNearbyDestinations(destination, [
+    ...(preferences.interests ?? []),
+    ...(preferences.activityPreferences ?? [])
+  ]);
 
   return Array.from({ length: tripDays }, (_, index) => {
     const date = new Date(startDate);
@@ -150,7 +188,7 @@ export function createDestinationItinerary(
       : nearbyDestinations[(index - 1) % nearbyDestinations.length];
 
     return {
-      ...createDayPlan(destination, focalDestination, index, travelMode),
+      ...createDayPlan(destination, focalDestination, index, travelMode, preferences),
       date: formatDate(date)
     };
   });
